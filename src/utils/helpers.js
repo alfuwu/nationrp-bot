@@ -178,8 +178,6 @@ function formatWarningBanner(rateStab, ratePrest) {
     return null; // No banner needed
 }
 
-// ─── Database migrations ──────────────────────────────────────────────────────
-
 // ─── Rank helpers ─────────────────────────────────────────────────────────────
 
 /**
@@ -224,6 +222,10 @@ async function sendToPlayer(client, interaction, userId, content) {
             await interaction.channel.send(content);
         }
     } catch (_) {}
+}
+
+async function getActivePlayers(db, excludeId) {
+    return db.all("SELECT id, username, ruler_name, nation FROM users WHERE status='active' AND id!=?", excludeId);
 }
 
 // ─── Army maintenance ─────────────────────────────────────────────────────────
@@ -424,7 +426,7 @@ module.exports = {
     calcStabMultiplier, getCharBonuses, calcNobleState,
     getWarningLevel, formatWarningBanner,
     getPlayerRank, isVitaleFree, getNotificationChannel,
-    sendToPlayer,
+    sendToPlayer, getActivePlayers,
     calcMorale,
     calcMaintenance,
     initDB, STAT_MAPPING,

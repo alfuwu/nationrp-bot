@@ -3,7 +3,7 @@ const {
     StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle
 } = require('discord.js');
 const { ARMY_TYPES, MERC_DESC, TERRAINS, FORMATIONS, BUILDINGS, ANCESTRIES } = require('../../data/constants');
-const { getMod, getPlayerRank, calcMaintenance } = require('../../utils/helpers');
+const { getMod, getPlayerRank, calcMaintenance, calcMorale } = require('../../utils/helpers');
 
 async function handleMilitary(interaction) {
     const db = interaction.client.db;
@@ -42,10 +42,6 @@ async function handleMilitary(interaction) {
     ]});
 }
 
-function calcMorale(user) {
-    const base = 100 + (user.rate_stab||0)*3 + (user.rate_prest||0)*2 - Math.max(0,-(user.food_surplus||0))*5 - Math.floor((user.servus||0)/5)*2;
-    return Math.max(30, Math.min(150, base));
-}
 
 // ─── Select handler ────────────────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder } = require('discord.js');
 const { ANCESTRIES, BUILDINGS, STAT_MAPPING, STAT_KEYS, TERRAINS } = require('../../data/constants');
-const { getMod, getPlayerRank, resolveAtlasHQ, getNotificationChannel, isGM, calcMaintenance, sendToPlayer } = require('../../utils/helpers');
+const { getMod, getPlayerRank, resolveAtlasHQ, getNotificationChannel, isGM, calcMaintenance, sendToPlayer, calcMorale } = require('../../utils/helpers');
 const { generateBattleName, classifyBattle } = require('./battlename');
 
 const TERRAIN_DEF      = { MOUNTAIN:15, FOREST:8, HILLS:5, RIVERLANDS:3, PLAINS:0, COASTAL:-2, SWAMP:6 };
@@ -20,17 +20,9 @@ const TERRAIN_COMBAT_MODS = {
 function encodeName(name) { return (name || '').replace(/ /g, '-'); }
 function decodeName(encoded) { return (encoded || '').replace(/-/g, ' '); }
 
-function calcMorale(user) {
-    const base = 100
-        + (user.rate_stab  || 0) * 3
-        + (user.rate_prest || 0) * 2
-        - Math.max(0, -(user.food_surplus || 0)) * 5
-        - Math.floor((user.servus || 0) / 5) * 2;
-    return Math.max(30, Math.min(150, base));
-}
 
 function calcArmyPower(user, context, terrainType) {
-    const inf = (user.mil_infantry || 0) + (user.mercs_temp || 0);
+    const inf = (user.mil_militia || 0) + (user.mil_spearmen || 0) + (user.mil_swordsman || 0) + (user.mil_shield || 0) + (user.mercs_temp || 0);
     const cav = user.mil_cavalry || 0;
     const rng = user.mil_ranged  || 0;
     const sig = user.mil_siege   || 0;
@@ -53,8 +45,8 @@ function calcArmyPower(user, context, terrainType) {
 }
 
 function compCounterBonus(atk, def) {
-    if ((atk.mil_cavalry || 0) > 0 && (def.mil_ranged || 0) > (def.mil_infantry || 0)) return 5;
-    if ((atk.mil_ranged  || 0) > 0 && (def.mil_infantry || 0) > (def.mil_cavalry || 0)) return 3;
+    if ((atk.mil_cavalry || 0) > 0 && (def.mil_ranged || 0) > (( (def.mil_militia||0) + (def.mil_spearmen||0) + (def.mil_swordsman||0) + (def.mil_shield||0) ) || 0)) return 5;
+    if ((atk.mil_ranged  || 0) > 0 && (( (def.mil_militia||0) + (def.mil_spearmen||0) + (def.mil_swordsman||0) + (def.mil_shield||0) ) || 0) > (def.mil_cavalry || 0)) return 3;
     return 0;
 }
 
@@ -162,18 +154,20 @@ async function handleBattleCompositionSubmit(interaction, atkId, defId) {
     const def = await db.get('SELECT * FROM users WHERE id=?', defId);
     if (!atk || !def) return interaction.reply({ content: '⚠️ Data not found.', ephemeral: true });
 
-    const fields = ['inf', 'cav', 'rng', 'sie', 'mercs'];
-    const colMap = { inf: 'mil_infantry', cav: 'mil_cavalry', rng: 'mil_ranged', sie: 'mil_siege', mercs: 'mercs_temp' };
+    const cols = ['mil_militia','mil_spearmen','mil_swordsman','mil_shield','mil_cavalry','mil_ranged','mil_siege','mercs_temp'];
     const counts = {};
-    for (const f of fields) {
-        const val = parseInt(interaction.fields.getTextInputValue(f)) || 0;
+    let totalFoodCost = 0;
+    for (const col of cols) {
+        let val = 0;
+        try { val = parseInt(interaction.fields.getTextInputValue(col)) || 0; } catch (e) {}
         if (val < 0) return interaction.reply({ content: '⚠️ Values must be 0 or positive.', ephemeral: true });
-        const max = atk[colMap[f]] || 0;
-        if (val > max) return interaction.reply({ content: `⚠️ Cannot commit more ${f} than you own (max ${max}).`, ephemeral: true });
-        counts[f] = val;
+        const max = atk[col] || 0;
+        if (val > max) return interaction.reply({ content: `⚠️ Cannot commit more ${col} than you own (max ${max}).`, ephemeral: true });
+        counts[col] = val;
+        totalFoodCost += val * 2;
     }
 
-    const foodCost = fieldFoodCostFor(counts);
+    const foodCost = totalFoodCost;
     if ((atk.food_surplus || 0) < foodCost)
         return interaction.reply({ content: `⚠️ Insufficient supplies. Need **${foodCost} 🥩**.`, ephemeral: true });
 
@@ -182,7 +176,8 @@ async function handleBattleCompositionSubmit(interaction, atkId, defId) {
     const terrainKeys = Object.keys(TERRAINS);
     const terrainKey = terrainKeys[Math.floor(Math.random() * terrainKeys.length)];
     const terrain = TERRAINS[terrainKey];
-    const compStr = `${counts.inf}_${counts.cav}_${counts.rng}_${counts.sie}_${counts.mercs}_${terrainKey}`;
+    const compStr = cols.map(c => counts[c]).join('_') + '_' + terrainKey;
+    const totalInf = counts.mil_militia + counts.mil_spearmen + counts.mil_swordsman + counts.mil_shield;
     const emb = new EmbedBuilder()
         .setTitle('⚔️ BATTLE REQUEST')
         .setColor(0xFF4400)
@@ -193,7 +188,7 @@ async function handleBattleCompositionSubmit(interaction, atkId, defId) {
             '',
             `🌍 **Terrain:** ${terrain?.name || terrainKey}`,
             '',
-            `⚔️ Inf: ${counts.inf} | 🐎 Cav: ${counts.cav} | 🏹 Rng: ${counts.rng} | 🪨 Sie: ${counts.sie} | 🗡️ Mercs: ${counts.mercs}`,
+            `⚔️ Inf: ${totalInf} | 🐎 Cav: ${counts.mil_cavalry} | 🏹 Rng: ${counts.mil_ranged} | 🪨 Sie: ${counts.mil_siege} | 🗡️ Mercs: ${counts.mercs_temp}`,
             `🔥 Morale: ${calcMorale(atk)} | 🥩 Food: ${foodCost}`,
         ].join('\n'));
 
@@ -241,7 +236,7 @@ async function handleBattleApprove(interaction, atkId, defId, compArgs, battleNa
                 `🌍 Terrain: **${terrain?.name || terrainKey}**`,
                 '',
                 `Choose which forces to commit to this battle.`,
-                `You have: ⚔️ Inf: ${def.mil_infantry || 0} | 🐎 Cav: ${def.mil_cavalry || 0} | 🏹 Rng: ${def.mil_ranged || 0} | 🪨 Sie: ${def.mil_siege || 0} | 🗡️ Mercs: ${def.mercs_temp || 0}`,
+                `You have: ⚔️ Inf: ${( (def.mil_militia||0) + (def.mil_spearmen||0) + (def.mil_swordsman||0) + (def.mil_shield||0) ) || 0} | 🐎 Cav: ${def.mil_cavalry || 0} | 🏹 Rng: ${def.mil_ranged || 0} | 🪨 Sie: ${def.mil_siege || 0} | 🗡️ Mercs: ${def.mercs_temp || 0}`,
             ].join('\n'));
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`wardefcommit_${atkId}_${defId}_${atkComp}`).setLabel('⚔️ Commit Forces').setStyle(ButtonStyle.Danger)
@@ -708,106 +703,34 @@ async function handleRaidCompositionSubmit(interaction, atkId, defId, townNameEn
     if (!atk || !def) return interaction.reply({ content: '⚠️ Data not found.', ephemeral: true });
 
     const townName = townNameEnc ? decodeName(townNameEnc) : null;
-    const fields = ['inf', 'cav', 'rng', 'sie', 'mercs'];
-    const colMap = { inf: 'mil_infantry', cav: 'mil_cavalry', rng: 'mil_ranged', sie: 'mil_siege', mercs: 'mercs_temp' };
+    const cols = ['mil_militia','mil_spearmen','mil_swordsman','mil_shield','mil_cavalry','mil_ranged','mil_siege','mercs_temp'];
     const counts = {};
-    for (const f of fields) {
-        const val = parseInt(interaction.fields.getTextInputValue(f)) || 0;
+    for (const col of cols) {
+        let val = 0;
+        try { val = parseInt(interaction.fields.getTextInputValue(col)) || 0; } catch (e) {}
         if (val < 0) return interaction.reply({ content: '⚠️ Values must be 0 or positive.', ephemeral: true });
-        if (val > (atk[colMap[f]] || 0)) return interaction.reply({ content: `⚠️ Cannot commit more ${f} than you own.`, ephemeral: true });
-        counts[f] = val;
+        const max = atk[col] || 0;
+        if (val > max) return interaction.reply({ content: `⚠️ Cannot commit more than you own (max ${max}).`, ephemeral: true });
+        counts[col] = val;
     }
 
-    const foodCost = fieldFoodCostFor(counts);
-    if ((atk.food_surplus || 0) < foodCost) return interaction.reply({ content: `⚠️ Need **${foodCost} 🥩**.`, ephemeral: true });
-    await db.run('UPDATE users SET food_surplus=food_surplus-? WHERE id=?', foodCost, atk.id);
+    const totalCost = cols.reduce((sum, c) => sum + counts[c], 0) * 2;
+    if ((atk.food_surplus || 0) < totalCost)
+        return interaction.reply({ content: `⚠️ Insufficient supplies. Need **${totalCost} 🥩**.`, ephemeral: true });
 
-    const siegeWarn = counts.sie > 0 ? '\n⚠️ Siege units committed — withdrawal will be slower.' : '';
-    const terrainKeys = Object.keys(TERRAINS);
-    const terrainKey = terrainKeys[Math.floor(Math.random() * terrainKeys.length)];
-    const terrain = TERRAINS[terrainKey];
-    const compStr = `${counts.inf}_${counts.cav}_${counts.rng}_${counts.sie}_${counts.mercs}_${terrainKey}`;
-    const raidName = generateBattleName('RAID', {
-        townName: townName || undefined,
-        attackerNation: atk.nation, defenderNation: def.nation,
-        attackerRulerName: atk.ruler_name
-    });
+    await db.run('UPDATE users SET food_surplus=food_surplus-? WHERE id=?', totalCost, atk.id);
 
+    const compStr = cols.map(c => counts[c]).join('_') + '_' + (townNameEnc || 'none');
+    const totalInf = counts.mil_militia + counts.mil_spearmen + counts.mil_swordsman + counts.mil_shield;
     const emb = new EmbedBuilder()
-        .setTitle(`🗡️ ${raidName}`)
-        .setColor(0xFF6600)
-        .setImage(terrain?.img || null)
+        .setTitle('🗡️ RAID REQUEST')
+        .setColor(0x8B0000)
         .setDescription([
-            `**Raider:** <@${atk.id}> ${atk.ruler_name ? `— ${atk.ruler_name}` : ''}${atk.nation ? ` of ${atk.nation}` : ''}`,
-            `**Target:** <@${def.id}> ${def.ruler_name ? `— ${def.ruler_name}` : ''}${def.nation ? ` of ${def.nation}` : ''}`,
-            townName ? `🎯 Town: **${townName}**` : '',
-            `🌍 Terrain: **${terrain?.name || terrainKey}**`,
+            `**Attacker:** <@${atk.id}>`,
+            `**Target:** <@${def.id}> ${townNameEnc ? 'at ' + decodeName(townNameEnc) : ''}`,
             '',
-            `⚔️ Inf: ${counts.inf} | 🐎 Cav: ${counts.cav} | 🏹 Rng: ${counts.rng} | 🪨 Sie: ${counts.sie} | 🗡️ Mercs: ${counts.mercs}`,
-            `🔥 Morale: ${calcMorale(atk)} | 🥩 Food: ${foodCost}${siegeWarn}`,
-        ].filter(Boolean).join('\n'));
-
-    const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`warraid_approve_${atk.id}_${def.id}_${compStr}${townName ? '_' + encodeName(townName) : ''}`).setLabel('✅ Approve Raid').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(`warraid_abort_${atk.id}`).setLabel('❌ Abort').setStyle(ButtonStyle.Danger)
-    );
-    await resolveAtlasHQ(interaction.client, emb, [row]);
-    return interaction.reply({ content: `🗡️ Raid submitted. **${foodCost} 🥩** spent. Awaiting GM approval.`, ephemeral: true });
-}
-
-async function handleRaidApprove(interaction, atkId, defId, compArgs, townNameEnc) {
-    const db = interaction.client.db;
-    if (!await isGM(db, interaction.user.id)) return interaction.reply({ content: 'Access Denied.', ephemeral: true });
-
-    const atk = await db.get('SELECT * FROM users WHERE id=?', atkId);
-    const def = await db.get('SELECT * FROM users WHERE id=?', defId);
-    if (!atk || !def) return interaction.reply({ content: '⚠️ Data not found.', ephemeral: true });
-
-    const townName = townNameEnc ? decodeName(townNameEnc) : null;
-    const comps = compArgs ? compArgs : [`${atk.mil_infantry || 0}`, `${atk.mil_cavalry || 0}`, `${atk.mil_ranged || 0}`, `${atk.mil_siege || 0}`, `${atk.mercs_temp || 0}`, 'PLAINS'];
-    const rInf = parseInt(comps[0]) || 0, rCav = parseInt(comps[1]) || 0, rRng = parseInt(comps[2]) || 0, rSie = parseInt(comps[3]) || 0, rMercs = parseInt(comps[4]) || 0;
-    const terrainKey = comps[5] || 'PLAINS';
-    const terrain = TERRAINS[terrainKey.toUpperCase()] || TERRAINS['PLAINS'];
-
-    // Phase 1: Raid combat
-    const atkForPower = { ...atk, mil_infantry: rInf, mil_cavalry: rCav, mil_ranged: rRng, mil_siege: rSie, mercs_temp: rMercs };
-    const atkRoll = Math.floor(Math.random() * 20) + 1;
-    const defRoll = Math.floor(Math.random() * 20) + 1;
-    const agAtk = await getAgBonus(db, atkId, atk);
-    const agDef = await getAgBonus(db, defId, def);
-    const atkOff = await calcOffenseScore(db, atkId);
-    const menMod = getMod(atk.attr_men || 10);
-    const hasCav = POLYSIA_KEYS.includes((atk.ancestry || '').toUpperCase()) && rCav > 0;
-    const polyB   = hasCav ? POLYSIA_CAV_BONUS : 0;
-    const counter = compCounterBonus(atkForPower, def);
-
-    const atkPower = calcArmyPower(atkForPower, 'field', terrainKey) + atkOff * 5 + menMod * 2 + polyB + counter + atkRoll + agAtk;
-    const defPower = calcArmyPower(def, 'field', terrainKey) * 1.2 + (await calcOffenseScore(db, defId)) * 5 + defRoll + agDef;
-    const raidWins = atkPower > defPower;
-
-    // Phase 1 casualties
-    const lossFactor = raidWins ? (0.80 + Math.random() * 0.10) : (0.60 + Math.random() * 0.20);
-    const p1Inf = Math.max(0, Math.floor(rInf * lossFactor));
-    const p1Cav = Math.max(0, Math.floor(rCav * lossFactor));
-    const p1Rng = Math.max(0, Math.floor(rRng * lossFactor));
-    const p1Sie = Math.max(0, Math.floor(rSie * lossFactor));
-    const p1Mercs = Math.max(0, Math.floor(rMercs * lossFactor));
-
-    const powerMargin = raidWins ? (atkPower / Math.max(1, defPower)) : (defPower / Math.max(1, atkPower));
-    const battleData = `${atkId}_${defId}_${comps.join('_')}_${raidWins ? 1 : 0}_${powerMargin.toFixed(2)}_${p1Inf}_${p1Cav}_${p1Rng}_${p1Sie}_${p1Mercs}_${townName ? encodeName(townName) : 'none'}`;
-
-    await interaction.update({ components: [], content: `🗡️ Raid Phase 1 complete. <@${atkId}> — choose to withdraw or press the attack.` });
-
-    // Send withdrawal prompt to attacker via DM
-    const emb = new EmbedBuilder()
-        .setTitle(`🗡️ Raid — ${raidWins ? 'Advantage' : 'Resistance'}`)
-        .setColor(raidWins ? 0x00FF88 : 0xFF0000)
-        .setDescription([
-            `Raid against <@${defId}> ${townName ? `(${townName})` : ''}`,
-            `Phase 1: Atk ${atkPower} vs Def ${defPower}`,
-            raidWins ? 'You have the upper hand.' : 'The defenders are holding firm.',
-            '',
-            'Choose your next move:',
+            `⚔️ Inf: ${totalInf} | 🐎 Cav: ${counts.mil_cavalry} | 🏹 Rng: ${counts.mil_ranged} | 🪨 Sie: ${counts.mil_siege} | 🗡️ Mercs: ${counts.mercs_temp}`,
+            `🔥 Morale: ${calcMorale(atk)} | 🥩 Food: ${totalCost}`,
         ].join('\n'));
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`raidwithdraw_now_${battleData}`).setLabel('🏃 Withdraw Now').setStyle(ButtonStyle.Success),

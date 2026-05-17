@@ -6,7 +6,7 @@ const { RESOURCES, TERRAIN_MULTIPLIERS, BUILDINGS, ANCESTRIES } = require('../..
 const {
     calcStabMultiplier, getCharBonuses, calcNobleState, formatWarningBanner,
     getPlayerRank, isVitaleFree, getNotificationChannel, calcMaintenance,
-    resolveAtlasHQ, GREAT_HOUSES, sendToPlayer
+    resolveAtlasHQ, GREAT_HOUSES, sendToPlayer, getActivePlayers
 } = require('../../utils/helpers');
 
 async function handleTax(interaction) {
@@ -322,7 +322,7 @@ async function handleTrade(interaction) {
             routeList,
         ].join('\n'));
 
-    const players = await db.all("SELECT id, username, ruler_name, nation FROM users WHERE status='active' AND id!=?", userId);
+    const players = await getActivePlayers(db, userId);
     const oneTimeMenu = new StringSelectMenuBuilder()
         .setCustomId(`trade_onedone_${userId}`)
         .setPlaceholder('1️⃣ One-Time Trade — select a player...')
@@ -632,6 +632,7 @@ async function handleSelect(interaction, action, args) {
         if (val === 'new') return interaction.reply({ content: 'Use `/atlas empire` and select a faction to trade with. For player routes, select a player above.', ephemeral: true });
         if (val === 'newplayer') {
             const uid = args[1];
+            const players = await getActivePlayers(db, uid);
             if (!players.length) return interaction.reply({ content: 'No other active players.', ephemeral: true });
             const pMenu = new StringSelectMenuBuilder().setCustomId(`trade_newplayer_${uid}`).setPlaceholder('Select a player...')
                 .addOptions(players.slice(0,25).map(p => ({ label: `${p.ruler_name||p.username}${p.nation?' of '+p.nation:''}`, value: p.id })));

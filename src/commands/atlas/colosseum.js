@@ -127,7 +127,7 @@ async function handleSelect(interaction, action, args) {
         // Challenge: player selected → defender picks terrain on accept
         if (sub === 'challenge') {
             const targetId = interaction.values[0];
-            if (targetId === 'none' || targetId === uid) return interaction.reply({ content: '⚠️ Invalid target.', ephemeral: true });
+            if (targetId === 'none' || targetId === interaction.user.id) return interaction.reply({ content: '⚠️ Invalid target.', ephemeral: true });
             await interaction.deferUpdate();
 
             const challenger = await db.get('SELECT * FROM users WHERE id=?', uid);
@@ -225,6 +225,7 @@ async function handleSelect(interaction, action, args) {
 
         // My Duels: view details or start round
         if (sub === 'myduels') {
+            const uid = interaction.user.id;
             const val = interaction.values[0];
             if (val === 'none') return interaction.reply({ content: 'No duels found.', ephemeral: true });
             if (val.startsWith('cancel_')) {
@@ -267,6 +268,7 @@ async function handleSelect(interaction, action, args) {
 
         // Bet: select duel → enter amount modal
         if (sub === 'bet') {
+            const uid = interaction.user.id;
             const val = interaction.values[0];
             if (val === 'none') return interaction.reply({ content: 'No duels to bet on.', ephemeral: true });
             const duelId = parseInt(val.replace('bet_', ''));
@@ -356,22 +358,7 @@ async function handleButton(interaction, action, args) {
             return interaction.reply({ embeds: [new EmbedBuilder().setTitle('🌍 Pick Arena Terrain').setColor(0xFFD700)
                 .setDescription('Choose the terrain for this duel:')],
                 components: [new ActionRowBuilder().addComponents(terrainMenu),
-                    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`colo_back_${uid}`).setLabel('← Back').setStyle(ButtonStyle.Secondary))], ephemeral: true });
-        }
-
-            // Send stance pick to both players via DM
-            for (const uid of [duel.challenger_id, duel.defender_id]) {
-                const stanceMenu = new StringSelectMenuBuilder()
-                    .setCustomId(`colo_stance_${duel.id}_${uid === duel.challenger_id ? 'c' : 'd'}`)
-                    .setPlaceholder('Round 1 — Pick Stance...')
-                    .addOptions(Object.entries(DUEL_STANCES).map(([k, v]) => ({ label: `${v.emoji} ${v.name}`, value: k, description: v.desc })));
-                await sendToPlayer(interaction.client, interaction, uid, {
-                    embeds: [new EmbedBuilder().setTitle(`🏟️ DUEL #${duelId} — Round 1`).setColor(0xFFD700)
-                        .setDescription(`Arena: **${TERRAINS[duel.terrain]?.name || duel.terrain}**\nHP: ${uid === duel.challenger_id ? duel.challenger_hp : duel.defender_hp}\nPick your stance:`)],
-                    components: [new ActionRowBuilder().addComponents(stanceMenu)]
-                });
-            }
-            return;
+                    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`colo_back_${interaction.user.id}`).setLabel('← Back').setStyle(ButtonStyle.Secondary))], ephemeral: true });
         }
 
         // Reject duel
@@ -396,6 +383,7 @@ async function handleButton(interaction, action, args) {
             return handleColosseum(interaction);
         }
     }
+}
 
 // ─── Stance Resolution ─────────────────────────────────────────────────────────
 
@@ -583,16 +571,5 @@ function duelEmbed(duel, uid) {
 }
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-
-function duelName(duel) {
-    const prefix = pick(DUEL_PREFIXES);
-    const noun = pick(DUEL_NOUNS);
-    return `The ${prefix} ${noun}`;
-}
-
-function duelDisplay(duel) {
-    const terrain = TERRAINS[duel.terrain]?.name || 'Plains';
-    return `🏟️ **${duelName(duel)}** — ${terrain} Arena`;
-}
 
 module.exports = { handleColosseum, handleSelect, handleModal, handleButton };

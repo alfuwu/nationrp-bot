@@ -119,6 +119,8 @@ module.exports = {
                         await client.db.run('DELETE FROM treaties WHERE initiator_id = ? OR partner_id = ?', tid, tid);
                         await client.db.run('DELETE FROM trade_routes WHERE initiator_id = ? OR partner_id = ?', tid, tid);
                         await client.db.run('DELETE FROM gm_events WHERE user_id = ?', tid);
+                        await client.db.run('DELETE FROM duels WHERE challenger_id = ? OR defender_id = ?', tid, tid);
+                        await client.db.run('DELETE FROM bets WHERE bettor_id = ?', tid);
                         await interaction.update({ embeds: [new EmbedBuilder().setTitle('👤 USER PURGED').setDescription(`Lineage erased: <@${tid}>.`).setColor(0xFF0000)], components: [] });
                     } else await interaction.update({ content: 'Purge protocol cancelled.', embeds: [], components: [] });
                     return;

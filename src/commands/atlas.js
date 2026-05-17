@@ -1,13 +1,14 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
-const { BUILDINGS, TERRAINS } = require('../data/constants');
-const { decodeFreeDist } = require('../utils/helpers');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
 const character = require('./atlas/character');
 const town = require('./atlas/town');
 const leaderboard = require('./atlas/leaderboard');
 const economy = require('./atlas/economy');
+
+// action.js now only handles: roll GUI, nation found, rebellion/revolt buttons, GM roll
+// scout and recruit moved to military.js
 const actionMod = require('./atlas/action');
-const trade = require('./atlas/trade');
+
 const diplomacy = require('./atlas/diplomacy');
 const warfare = require('./atlas/warfare');
 const military = require('./atlas/military');
@@ -136,10 +137,6 @@ module.exports = {
         }
         if (action === 'audit') {
             return await admin.handleAudit(interaction, action, args);
-        }
-        if (action === 'lb') {
-            await interaction.deferUpdate();
-            return await leaderboard.handleLeaderboard(interaction, args[0] || 'total');
         }
         if (action === 'lb') {
             await interaction.deferUpdate();
