@@ -174,9 +174,9 @@ const FORMATIONS = {
 const MERC_DESC = 'Soldiers-for-hire drawn from various lands and backgrounds, bound by coin rather than loyalty. They fight effectively but disband at the end of each Imperial turn.';
 
 const DUEL_STANCES = {
-    HEAVY:   { name: 'Heavy Attack', emoji: '⚔️', beats: 'DEFEND', losesTo: 'QUICK', winMult: 2.0, lossMult: 0.5, tieMult: 1.0, desc: 'Powerful swing. Destroys Defend.' },
-    DEFEND:  { name: 'Defend',       emoji: '🛡️', beats: 'QUICK', losesTo: 'HEAVY', winMult: 1.0, lossMult: 0.7, tieMult: 1.0, desc: 'Steady guard. Counters Quick Strike.' },
-    QUICK:   { name: 'Quick Strike', emoji: '⚡', beats: 'HEAVY', losesTo: 'DEFEND', winMult: 1.5, lossMult: 0.5, tieMult: 1.0, desc: 'Fast lunge. Outspeeds Heavy Attack.' },
+    HEAVY:   { name: 'Heavy Attack', emoji: '⚔️', beats: 'RIPOSTE', losesTo: 'QUICK', winMult: 2.0, lossMult: 0.5, tieMult: 1.0, desc: 'Powerful swing. Destroys Riposte.' },
+    RIPOSTE: { name: 'Riposte',      emoji: '🛡️', beats: 'QUICK', losesTo: 'HEAVY', winMult: 1.0, lossMult: 0.7, tieMult: 1.0, desc: 'Calculated counter. Beats Quick Strike.' },
+    QUICK:   { name: 'Quick Strike', emoji: '⚡', beats: 'HEAVY', losesTo: 'RIPOSTE', winMult: 1.5, lossMult: 0.5, tieMult: 1.0, desc: 'Fast lunge. Outspeeds Heavy Attack.' },
 };
 
 const DUEL_TERRAIN_MODS = {

@@ -235,7 +235,7 @@ module.exports = {
             return await colosseum.handleSelect(interaction, action, args);
         }
         if (action === 'wardefform') {
-            return await warfare.handleDefenderFormationPick(interaction, args[0], args[1], args[2], args[3]);
+            return await warfare.handleDefenderFormationPick(interaction, args[0], args[1], args[2], interaction.values[0]);
         }
     }
 };

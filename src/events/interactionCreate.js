@@ -147,6 +147,7 @@ module.exports = {
                 }
             }
         } catch (error) {
+            if (error.code === 10062 && interaction.isAutocomplete()) return; // Suppress autocomplete expiration
             console.error('[ATLAS] INTERACTION ERROR:', error);
             const content = '⚠️ An internal error occurred while processing this interaction.';
             try {

@@ -176,7 +176,7 @@ async function handleBattleCompositionSubmit(interaction, atkId, defId) {
     const terrainKeys = Object.keys(TERRAINS);
     const terrainKey = terrainKeys[Math.floor(Math.random() * terrainKeys.length)];
     const terrain = TERRAINS[terrainKey];
-    const compStr = cols.map(c => counts[c]).join('_') + '_' + terrainKey;
+    const compStr = cols.map(c => counts[c]).join('-') + '-' + terrainKey;
     const totalInf = counts.mil_militia + counts.mil_spearmen + counts.mil_swordsman + counts.mil_shield;
     const emb = new EmbedBuilder()
         .setTitle('⚔️ BATTLE REQUEST')
@@ -211,9 +211,9 @@ async function handleBattleApprove(interaction, atkId, defId, compArgs, battleNa
     if (!atk || !def) return interaction.reply({ content: '⚠️ One or both players not found.', ephemeral: true });
 
     // Parse attacker composition
-    const compParts = compArgs ? compArgs : [`${atk.mil_infantry || 0}`, `${atk.mil_cavalry || 0}`, `${atk.mil_ranged || 0}`, `${atk.mil_siege || 0}`, `${atk.mercs_temp || 0}`, 'PLAINS'];
-    const atkComp = compParts.slice(0, 5).join('_');
-    const terrainKey = compParts[5] || 'PLAINS';
+    const compParts = typeof compArgs === 'string' ? compArgs.split('-') : [`${atk.mil_militia || 0}`, `${atk.mil_spearmen || 0}`, `${atk.mil_swordsman || 0}`, `${atk.mil_shield || 0}`, `${atk.mil_cavalry || 0}`, `${atk.mil_ranged || 0}`, `${atk.mil_siege || 0}`, `${atk.mercs_temp || 0}`, 'PLAINS'];
+    const atkComp = compParts.slice(0, 8).join('-');
+    const terrainKey = compParts[8] || 'PLAINS';
     const terrain = TERRAINS[terrainKey.toUpperCase()] || TERRAINS['PLAINS'];
 
     await interaction.update({ components: [], content: `⚔️ Battle approved. Awaiting <@${defId}> to commit forces...` });
@@ -221,7 +221,7 @@ async function handleBattleApprove(interaction, atkId, defId, compArgs, battleNa
     const displayName = battleName || 'Battle';
 
     // Lock defender: only battle-response commands allowed
-    await db.run('UPDATE users SET pending_battle=? WHERE id=?', `${atkId}|${atkComp}_${terrainKey}|${encodeName(displayName)}`, defId);
+    await db.run('UPDATE users SET pending_battle=? WHERE id=?', `${atkId}|${atkComp}-${terrainKey}|${encodeName(displayName)}`, defId);
 
     // Send defender a "Commit Forces" button
 
@@ -239,7 +239,7 @@ async function handleBattleApprove(interaction, atkId, defId, compArgs, battleNa
                 `You have: ⚔️ Inf: ${( (def.mil_militia||0) + (def.mil_spearmen||0) + (def.mil_swordsman||0) + (def.mil_shield||0) ) || 0} | 🐎 Cav: ${def.mil_cavalry || 0} | 🏹 Rng: ${def.mil_ranged || 0} | 🪨 Sie: ${def.mil_siege || 0} | 🗡️ Mercs: ${def.mercs_temp || 0}`,
             ].join('\n'));
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`wardefcommit_${atkId}_${defId}_${atkComp}`).setLabel('⚔️ Commit Forces').setStyle(ButtonStyle.Danger)
+            new ButtonBuilder().setCustomId(`wardefcommit_${atkId}_${defId}_${atkComp}-${terrainKey}`).setLabel('⚔️ Commit Forces').setStyle(ButtonStyle.Danger)
         );
         try { await chan.send({ content: `<@${defId}>`, embeds: [emb], components: [row] }); } catch (_) {}
     }
@@ -251,7 +251,7 @@ async function handleBattleApprove(interaction, atkId, defId, compArgs, battleNa
             const emb = new EmbedBuilder().setTitle('⚔️ YOU ARE UNDER ATTACK').setColor(0xFF0000)
                 .setDescription(`<@${atkId}> is marching against you! Click below to commit your forces.`);
             const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`wardefcommit_${atkId}_${defId}_${atkComp}`).setLabel('⚔️ Commit Forces').setStyle(ButtonStyle.Danger)
+                new ButtonBuilder().setCustomId(`wardefcommit_${atkId}_${defId}_${atkComp}-${terrainKey}`).setLabel('⚔️ Commit Forces').setStyle(ButtonStyle.Danger)
             );
             await u.send({ embeds: [emb], components: [row] });
         }
@@ -265,8 +265,8 @@ async function handleDefenderCommit(interaction, atkId, defId, atkComp) {
     if (!def) return interaction.reply({ content: '⚠️ Data not found.', ephemeral: true });
     if (interaction.user.id !== defId) return interaction.reply({ content: '⚠️ Only the defender may commit forces to this battle.', ephemeral: true });
 
-    const atkCompArr = atkComp.split('_');
-    const terrainKey = atkCompArr[5] || 'PLAINS';
+    const atkCompArr = atkComp.split('-');
+    const terrainKey = atkCompArr[8] || 'PLAINS';
 
     // Show formation pick menu
     const { FORMATIONS } = require('../../data/constants');
@@ -308,48 +308,50 @@ async function handleDefenderFormationPick(interaction, atkId, defId, atkComp, f
     // Defender submits percentage modal → battle resolves
     async function handleBattleResolve(interaction, atkId, defId, atkCompStr, formationKey) {
     const db = interaction.client.db;
-    const compParts = atkCompStr.split('_');
-    const atkComp = compParts.slice(0, 8).map(Number);
-    const atkFormation = compParts[8] || 'LINE';
-    const mode = compParts[9] || 'battle';
+    const compParts = atkCompStr.split('-');
+    const atkCompArr = compParts.slice(0,8).map(Number);
+    const terrainKey = compParts[8] || 'PLAINS';
 
     const atk = await db.get('SELECT * FROM users WHERE id=?', atkId);
     const def = await db.get('SELECT * FROM users WHERE id=?', defId);
     if (!atk || !def) return interaction.reply({ content: '⚠️ Data not found.', ephemeral: true });
 
-    // Retrieve battle name from defender's pending_battle
     let battleName = 'Battle';
     if (def.pending_battle) {
         const parts = def.pending_battle.split('|');
         if (parts.length >= 3) battleName = decodeName(parts[2]);
     }
 
-    // Parse defender composition from modal
-    const terrainKey = atkCompStr.split('_')[5] || 'PLAINS';
-    const colMap = ['inf', 'cav', 'rng', 'sie', 'mercs'];
-    const defCols = { inf: 'mil_infantry', cav: 'mil_cavalry', rng: 'mil_ranged', sie: 'mil_siege', mercs: 'mercs_temp' };
-    const defComp = {};
+    const cols = ['mil_militia','mil_spearmen','mil_swordsman','mil_shield','mil_cavalry','mil_ranged','mil_siege','mercs_temp'];
+    const defCompRaw = {};
     let defTotal = 0;
-    for (const f of colMap) {
-        const val = parseInt(interaction.fields.getTextInputValue(f)) || 0;
+    for (const f of cols) {
+        let val = 0;
+        try { val = parseInt(interaction.fields.getTextInputValue(f)) || 0; } catch (e) {}
         if (val < 0) return interaction.reply({ content: '⚠️ Values must be 0 or positive.', ephemeral: true });
-        const max = def[defCols[f]] || 0;
-        if (val > max) return interaction.reply({ content: `⚠️ Cannot commit more ${f} than you own (max ${max}).`, ephemeral: true });
-        defComp[f] = val;
-        if (f !== 'sie') defTotal += val;
+        const max = def[f] || 0;
+        if (val > max) return interaction.reply({ content: `⚠️ Cannot commit more ${f.replace('mil_','')} than you own (max ${max}).`, ephemeral: true });
+        defCompRaw[f] = val;
+        if (f !== 'mil_siege') defTotal += val;
     }
 
-    // Deduct defender food for committed units
     const defFood = (defTotal) * 2;
     if ((def.food_surplus || 0) < defFood)
         return interaction.reply({ content: `⚠️ Insufficient food. Need **${defFood} 🥩**.`, ephemeral: true });
     await db.run('UPDATE users SET food_surplus=MAX(0,food_surplus-?) WHERE id=?', defFood, def.id);
 
-    // Virtual objects for power calc
-    const atkForPower = { ...atk, mil_infantry: atkComp[0], mil_cavalry: atkComp[1], mil_ranged: atkComp[2], mil_siege: atkComp[3], mercs_temp: atkComp[4] };
+    const defComp = {
+        inf: defCompRaw.mil_militia + defCompRaw.mil_spearmen + defCompRaw.mil_swordsman + defCompRaw.mil_shield,
+        cav: defCompRaw.mil_cavalry,
+        rng: defCompRaw.mil_ranged,
+        sie: defCompRaw.mil_siege,
+        mercs: defCompRaw.mercs_temp
+    };
+    const atkInf = atkCompArr[0] + atkCompArr[1] + atkCompArr[2] + atkCompArr[3];
+
+    const atkForPower = { ...atk, mil_infantry: atkInf, mil_cavalry: atkCompArr[4], mil_ranged: atkCompArr[5], mil_siege: atkCompArr[6], mercs_temp: atkCompArr[7] };
     const defForPower = { ...def, mil_infantry: defComp.inf, mil_cavalry: defComp.cav, mil_ranged: defComp.rng, mil_siege: defComp.sie, mercs_temp: defComp.mercs };
 
-    // Rolls
     const atkRoll = Math.floor(Math.random() * 20) + 1;
     const defRoll = Math.floor(Math.random() * 20) + 1;
     const agBonusAtk = await getAgBonus(db, atkId, atk);
@@ -365,49 +367,49 @@ async function handleDefenderFormationPick(interaction, atkId, defId, atkComp, f
     const defPower = calcArmyPower(defForPower, 'field', terrainKey) * 1.2 + (await calcOffenseScore(db, defId)) * 5 + defRoll + agBonusDef;
 
     const winnerId = atkPower > defPower ? atkId : defId;
-    const loserId  = winnerId === atkId ? defId : atkId;
-    const winner   = winnerId === atkId ? atk : def;
-    const loser    = winnerId === atkId ? def : atk;
     const isAtkWin = winnerId === atkId;
 
-    // Casualties with committed counts
     const lossFactor = 0.70 + Math.random() * 0.15;
 
-    // Attacker casualties from committed units
-    const atkInfSurvive = Math.max(0, Math.floor(atkComp[0] * lossFactor));
-    const atkCavSurvive = Math.max(0, Math.floor(atkComp[1] * lossFactor));
-    const atkRngSurvive = Math.max(0, Math.floor(atkComp[2] * lossFactor));
-    const atkSieSurvive = Math.max(0, Math.floor(atkComp[3] * lossFactor));
-    const atkMercsSurvive = Math.max(0, Math.floor(atkComp[4] * lossFactor));
+    const atkl = {
+        militia: Math.max(0, atkCompArr[0] - Math.max(0, Math.floor(atkCompArr[0] * lossFactor))),
+        spearmen: Math.max(0, atkCompArr[1] - Math.max(0, Math.floor(atkCompArr[1] * lossFactor))),
+        swordsman: Math.max(0, atkCompArr[2] - Math.max(0, Math.floor(atkCompArr[2] * lossFactor))),
+        shield: Math.max(0, atkCompArr[3] - Math.max(0, Math.floor(atkCompArr[3] * lossFactor))),
+        cavalry: Math.max(0, atkCompArr[4] - Math.max(0, Math.floor(atkCompArr[4] * lossFactor))),
+        ranged: Math.max(0, atkCompArr[5] - Math.max(0, Math.floor(atkCompArr[5] * lossFactor))),
+        siege: Math.max(0, atkCompArr[6] - Math.max(0, Math.floor(atkCompArr[6] * lossFactor))),
+        mercs: Math.max(0, atkCompArr[7] - Math.max(0, Math.floor(atkCompArr[7] * lossFactor)))
+    };
 
-    // Defender casualties from committed units
-    const defInfSurvive = Math.max(0, Math.floor(defComp.inf * lossFactor));
-    const defCavSurvive = Math.max(0, Math.floor(defComp.cav * lossFactor));
-    const defRngSurvive = Math.max(0, Math.floor(defComp.rng * lossFactor));
+    const defl = {
+        militia: Math.max(0, defCompRaw.mil_militia - Math.max(0, Math.floor(defCompRaw.mil_militia * lossFactor))),
+        spearmen: Math.max(0, defCompRaw.mil_spearmen - Math.max(0, Math.floor(defCompRaw.mil_spearmen * lossFactor))),
+        swordsman: Math.max(0, defCompRaw.mil_swordsman - Math.max(0, Math.floor(defCompRaw.mil_swordsman * lossFactor))),
+        shield: Math.max(0, defCompRaw.mil_shield - Math.max(0, Math.floor(defCompRaw.mil_shield * lossFactor))),
+        cavalry: Math.max(0, defCompRaw.mil_cavalry - Math.max(0, Math.floor(defCompRaw.mil_cavalry * lossFactor))),
+        ranged: Math.max(0, defCompRaw.mil_ranged - Math.max(0, Math.floor(defCompRaw.mil_ranged * lossFactor))),
+        siege: Math.max(0, defCompRaw.mil_siege - Math.max(0, Math.floor(defCompRaw.mil_siege * lossFactor))),
+        mercs: Math.max(0, defCompRaw.mercs_temp - Math.max(0, Math.floor(defCompRaw.mercs_temp * lossFactor)))
+    };
 
-    // Apply casualties to DB (subtract losses from actual counts)
-    const atkInfLost = Math.max(0, atkComp[0] - atkInfSurvive);
-    const atkCavLost = Math.max(0, atkComp[1] - atkCavSurvive);
-    const atkRngLost = Math.max(0, atkComp[2] - atkRngSurvive);
-    const atkSieLost = Math.max(0, atkComp[3] - atkSieSurvive);
-    const atkMercsLost = Math.max(0, atkComp[4] - atkMercsSurvive);
+    await db.run('UPDATE users SET mil_militia=MAX(0,mil_militia-?), mil_spearmen=MAX(0,mil_spearmen-?), mil_swordsman=MAX(0,mil_swordsman-?), mil_shield=MAX(0,mil_shield-?), mil_cavalry=MAX(0,mil_cavalry-?), mil_ranged=MAX(0,mil_ranged-?), mil_siege=MAX(0,mil_siege-?), mercs_temp=MAX(0,mercs_temp-?) WHERE id=?',
+        atkl.militia, atkl.spearmen, atkl.swordsman, atkl.shield, atkl.cavalry, atkl.ranged, atkl.siege, atkl.mercs, atkId);
+    await db.run('UPDATE users SET mil_militia=MAX(0,mil_militia-?), mil_spearmen=MAX(0,mil_spearmen-?), mil_swordsman=MAX(0,mil_swordsman-?), mil_shield=MAX(0,mil_shield-?), mil_cavalry=MAX(0,mil_cavalry-?), mil_ranged=MAX(0,mil_ranged-?), mil_siege=MAX(0,mil_siege-?), mercs_temp=MAX(0,mercs_temp-?) WHERE id=?',
+        defl.militia, defl.spearmen, defl.swordsman, defl.shield, defl.cavalry, defl.ranged, defl.siege, defl.mercs, defId);
 
-    const defInfLost = Math.max(0, defComp.inf - defInfSurvive);
-    const defCavLost = Math.max(0, defComp.cav - defCavSurvive);
-    const defRngLost = Math.max(0, defComp.rng - defRngSurvive);
+    const atkInfLost = atkl.militia + atkl.spearmen + atkl.swordsman + atkl.shield;
+    const defInfLost = defl.militia + defl.spearmen + defl.swordsman + defl.shield;
+    const atkCavLost = atkl.cavalry;
+    const defCavLost = defl.cavalry;
+    const atkRngLost = atkl.ranged;
+    const defRngLost = defl.ranged;
 
-    await db.run('UPDATE users SET mil_infantry=MAX(0,mil_infantry-?), mil_cavalry=MAX(0,mil_cavalry-?), mil_ranged=MAX(0,mil_ranged-?), mil_siege=MAX(0,mil_siege-?), mercs_temp=MAX(0,mercs_temp-?) WHERE id=?',
-        atkInfLost, atkCavLost, atkRngLost, atkSieLost, atkMercsLost, atkId);
-    await db.run('UPDATE users SET mil_infantry=MAX(0,mil_infantry-?), mil_cavalry=MAX(0,mil_cavalry-?), mil_ranged=MAX(0,mil_ranged-?) WHERE id=?',
-        defInfLost, defCavLost, defRngLost, defId);
-
-    // Update maintenance for both
     const atkRow = await db.get('SELECT * FROM users WHERE id=?', atkId);
     const defRow = await db.get('SELECT * FROM users WHERE id=?', defId);
     await db.run('UPDATE users SET mil_maintenance_cost=? WHERE id=?', calcMaintenance(atkRow), atkId);
     await db.run('UPDATE users SET mil_maintenance_cost=? WHERE id=?', calcMaintenance(defRow), defId);
 
-    // Prestige/stability
     if (isAtkWin) {
         await db.run('UPDATE users SET rate_prest=MAX(-10,rate_prest-2), rate_stab=MAX(-10,rate_stab-1) WHERE id=?', defId);
         await db.run('UPDATE users SET rate_prest=MIN(10,rate_prest+1) WHERE id=?', atkId);
@@ -418,64 +420,58 @@ async function handleDefenderFormationPick(interaction, atkId, defId, atkComp, f
 
     await db.run('INSERT INTO gm_events (user_id, gm_id, event_type, severity, effect_snapshot, created_at) VALUES (?,?,?,?,?,?)',
         winnerId, interaction.user?.id || 'system', 'field_battle', 1,
-        JSON.stringify({ atk: atkId, def: defId, winner: winnerId, atkComp: atkCompStr, defComp: `${defComp.inf}_${defComp.cav}_${defComp.rng}_${defComp.sie}_${defComp.mercs}` }),
+        JSON.stringify({ atk: atkId, def: defId, winner: winnerId, atkComp: atkCompStr, defComp: `${defCompRaw.mil_militia}-${defCompRaw.mil_spearmen}-${defCompRaw.mil_swordsman}-${defCompRaw.mil_shield}-${defCompRaw.mil_cavalry}-${defCompRaw.mil_ranged}-${defCompRaw.mil_siege}-${defCompRaw.mercs_temp}` }),
         Date.now());
 
-    // Clear defender lock
     await db.run('UPDATE users SET pending_battle=NULL WHERE id=?', defId);
 
-    // Detect if outnumbered (loser had <= half winner's power)
     const loserPower = isAtkWin ? defPower : atkPower;
     const winnerPower = isAtkWin ? atkPower : defPower;
     const isOutnumbered = loserPower > 0 && winnerPower / loserPower >= 2.0;
 
-    // Notify defender that forces are committed
     await interaction.reply({ content: '⚔️ Forces committed! The battle is joined.', ephemeral: true });
 
-    // Notify both players
     const terrain = TERRAINS[terrainKey.toUpperCase()] || TERRAINS['PLAINS'];
 
     for (const uid of [atkId, defId]) {
+        const isWin = uid === winnerId;
         const userObj = uid === atkId ? atk : def;
         const chan = await getNotificationChannel(interaction.client, userObj);
-        const isWinner = uid === winnerId;
-        const isAtk = uid === atkId;
-        const lossText = isAtk
-            ? `\n⚔️ Inf: ${atkInfLost} lost | 🐎 Cav: ${atkCavLost} lost | 🏹 Rng: ${atkRngLost} lost | 🪨 Sie: ${atkSieLost} lost | 🗡️ Mercs: ${atkMercsLost} lost`
-            : `\n⚔️ Inf: ${defInfLost} lost | 🐎 Cav: ${defCavLost} lost | 🏹 Rng: ${defRngLost} lost`;
-
-        const embTitle = isOutnumbered
-            ? `The Desperate Stand at ${isWinner ? '🏆' : '💀'} ${battleName}`
-            : `${isWinner ? '🏆' : '💀'} ${battleName}`;
 
         const emb = new EmbedBuilder()
-            .setTitle(embTitle)
-            .setColor(isWinner ? 0x00FF88 : 0xFF0000)
-            .setImage(terrain.img || null)
+            .setTitle(`${isWin ? '🏆' : '💀'} ${battleName}`)
+            .setColor(isWin ? 0x00FF88 : 0xFF0000)
+            .setImage(terrain?.img || null)
             .setDescription([
-                `**${isAtk ? (atk.ruler_name || 'Attacker') : (def.ruler_name || 'Defender')}** vs **${isAtk ? (def.ruler_name || 'Defender') : (atk.ruler_name || 'Attacker')}**`,
-                `🌍 Terrain: ${terrain.name || terrainKey}`,
+                `**${battleName}** (${terrain?.name || terrainKey})`,
+                `Atk: <@${atkId}> vs Def: <@${defId}>`,
                 '',
-                `Atk roll: ${atkRoll} → Power: ${atkPower}`,
-                `Def roll: ${defRoll} → Power: ${defPower}`,
+                `**Power:** ${atkPower} vs ${defPower}`,
+                `${isOutnumbered ? '⚠️ **OUTNUMBERED!** A crushed defeat.' : ''}`,
                 '',
-                isWinner ? '+1 Prestige' : `-2 Prestige, -1 Stability${lossText}`,
+                `**Attacker Losses:**`,
+                `⚔️ Inf: ${atkInfLost} | 🐎 Cav: ${atkCavLost} | 🏹 Rng: ${atkRngLost}`,
+                '',
+                `**Defender Losses:**`,
+                `⚔️ Inf: ${defInfLost} | 🐎 Cav: ${defCavLost} | 🏹 Rng: ${defRngLost}`,
+                '',
+                `${isWin ? '+1 Prestige' : '-2 Prestige, -1 Stability'}`
             ].join('\n'));
+
         let sent = false;
         if (chan) { try { await chan.send({ content: `<@${uid}>`, embeds: [emb] }); sent = true; } catch (_) {} }
         if (!sent) { try { const u = await interaction.client.users.fetch(uid); if (u) await u.send({ embeds: [emb] }); } catch (_) {} }
     }
 
-    // Substation pick for winner
     if (Math.random() < 0.20) {
-        const chan = await getNotificationChannel(interaction.client, winner);
+        const chan = await getNotificationChannel(interaction.client, isAtkWin ? atk : def);
         if (chan) {
             const emb = new EmbedBuilder().setTitle('✨ MOMENT OF BRILLIANCE').setColor(0xFFD700)
                 .setDescription('Choose a substat to improve (+1):');
             const row1 = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`warbattle_ss_str_${winnerId}`).setLabel('💪 STR').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId(`warbattle_ss_mot_${winnerId}`).setLabel('🏃 MOT').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId(`warbattle_ss_men_${winnerId}`).setLabel('💀 MEN').setStyle(ButtonStyle.Primary)
+                new ButtonBuilder().setCustomId(`warbattle_ss_men_${winnerId}`).setLabel('🔥 MEN').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId(`warbattle_ss_mot_${winnerId}`).setLabel('⚡ MOT').setStyle(ButtonStyle.Primary)
             );
             const row2 = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`warbattle_ss_int_${winnerId}`).setLabel('🧠 INT').setStyle(ButtonStyle.Primary),
@@ -720,17 +716,48 @@ async function handleRaidCompositionSubmit(interaction, atkId, defId, townNameEn
 
     await db.run('UPDATE users SET food_surplus=food_surplus-? WHERE id=?', totalCost, atk.id);
 
-    const compStr = cols.map(c => counts[c]).join('_') + '_' + (townNameEnc || 'none');
+    // PHASE 1 COMBAT
+    const terrainKey = townName ? (await db.get('SELECT terrain_type FROM towns WHERE user_id=? AND name=?', defId, townName))?.terrain_type || 'PLAINS' : 'PLAINS';
+    
+    const atkRoll = Math.floor(Math.random() * 20) + 1;
+    const defRoll = Math.floor(Math.random() * 20) + 1;
+    const agAtk = await getAgBonus(db, atkId, atk);
+    const agDef = await getAgBonus(db, defId, def);
+
     const totalInf = counts.mil_militia + counts.mil_spearmen + counts.mil_swordsman + counts.mil_shield;
+    const atkForPower = { ...atk, mil_infantry: totalInf, mil_cavalry: counts.mil_cavalry, mil_ranged: counts.mil_ranged, mil_siege: counts.mil_siege, mercs_temp: counts.mercs_temp };
+    
+    // Raid attackers get massive field advantage
+    const atkPower = calcArmyPower(atkForPower, 'field', terrainKey) * 1.5 + (await calcOffenseScore(db, atkId)) * 5 + getMod(atk.attr_men || 10) * 2 + atkRoll + agAtk;
+    const defPower = calcArmyPower(def, 'field', terrainKey) + defRoll + agDef;
+
+    const p1Wins = atkPower > defPower;
+    const powerMargin = Math.max(0.1, (atkPower / Math.max(1, defPower))).toFixed(2);
+
+    // Phase 1 casualties (light)
+    const p1Loss = p1Wins ? (0.90 + Math.random() * 0.10) : (0.75 + Math.random() * 0.15);
+    const p1Inf = Math.max(0, Math.floor(totalInf * p1Loss));
+    const p1Cav = Math.max(0, Math.floor(counts.mil_cavalry * p1Loss));
+    const p1Rng = Math.max(0, Math.floor(counts.mil_ranged * p1Loss));
+    const p1Sie = Math.max(0, Math.floor(counts.mil_siege * p1Loss));
+    const p1Mercs = Math.max(0, Math.floor(counts.mercs_temp * p1Loss));
+
+    const battleData = `${atkId}_${defId}_${totalInf}_${counts.mil_cavalry}_${counts.mil_ranged}_${counts.mil_siege}_${counts.mercs_temp}_${terrainKey}_${p1Wins ? '1' : '0'}_${powerMargin}_${p1Inf}_${p1Cav}_${p1Rng}_${p1Sie}_${p1Mercs}_${townNameEnc || 'none'}`;
+
     const emb = new EmbedBuilder()
-        .setTitle('🗡️ RAID REQUEST')
-        .setColor(0x8B0000)
+        .setTitle('🗡️ RAID PHASE 1 COMPLETE')
+        .setColor(p1Wins ? 0x00FF88 : 0xFFAA00)
         .setDescription([
-            `**Attacker:** <@${atk.id}>`,
             `**Target:** <@${def.id}> ${townNameEnc ? 'at ' + decodeName(townNameEnc) : ''}`,
             '',
-            `⚔️ Inf: ${totalInf} | 🐎 Cav: ${counts.mil_cavalry} | 🏹 Rng: ${counts.mil_ranged} | 🪨 Sie: ${counts.mil_siege} | 🗡️ Mercs: ${counts.mercs_temp}`,
-            `🔥 Morale: ${calcMorale(atk)} | 🥩 Food: ${totalCost}`,
+            `⚔️ Phase 1 Result: **${p1Wins ? 'Breached Defenses' : 'Met Resistance'}**`,
+            `Power Margin: x${powerMargin}`,
+            '',
+            `Surviving Forces:`,
+            `Inf: ${p1Inf}/${totalInf} | 🐎 Cav: ${p1Cav}/${counts.mil_cavalry} | 🏹 Rng: ${p1Rng}/${counts.mil_ranged}`,
+            `🪨 Sie: ${p1Sie}/${counts.mil_siege} | 🗡️ Mercs: ${p1Mercs}/${counts.mercs_temp}`,
+            '',
+            `Do you want to withdraw now with your loot and surviving forces, or press the attack?`
         ].join('\n'));
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`raidwithdraw_now_${battleData}`).setLabel('🏃 Withdraw Now').setStyle(ButtonStyle.Success),
@@ -845,16 +872,23 @@ async function handleBattleNameSubmit(interaction, atkId, defId, compArgs) {
 
     let battleName = nameInput;
     if (!battleName || battleName.length === 0) {
-        const terrainKey = (compArgs && compArgs.length >= 6) ? compArgs[5] : 'PLAINS';
-        const terrain = TERRAINS[terrainKey.toUpperCase()] || TERRAINS['PLAINS'];
-        const battleType = classifyBattle({ hasTown: false, terrainType: terrainKey, isRaid: false });
+        const compStr = (compArgs && compArgs.length > 0) ? compArgs[0] : '';
+        let terrainKey = 'PLAINS';
+        if (compStr && compStr.includes('-')) {
+            terrainKey = compStr.split('-')[8] || 'PLAINS';
+        } else if (compArgs && compArgs.length >= 6) {
+            terrainKey = compArgs[5] || 'PLAINS';
+        }
+        const safeTerrainKey = terrainKey || 'PLAINS';
+        const terrain = TERRAINS[safeTerrainKey.toUpperCase()] || TERRAINS['PLAINS'];
+        const battleType = classifyBattle({ hasTown: false, terrainType: safeTerrainKey, isRaid: false });
         battleName = generateBattleName(battleType, {
             attackerNation: atk?.nation, defenderNation: def?.nation,
             attackerRulerName: atk?.ruler_name, isOutnumbered: false
         });
     }
 
-    return handleBattleApprove(interaction, atkId, defId, compArgs, battleName);
+    return handleBattleApprove(interaction, atkId, defId, compStr, battleName);
 }
 
 async function handleRebellionEvent(db, user) {

@@ -366,18 +366,7 @@ async function handleEmpire(interaction) {
         emb.setFooter({ text: 'Embargoed — seek Vitale through player trade.' });
     }
 
-    const factionMenu = new StringSelectMenuBuilder()
-        .setCustomId(`empire_factiontrade_${userId}`)
-        .setPlaceholder('Trade with a faction...')
-        .addOptions(
-            { label: 'Styx Empire (Vitale)', value: 'styx', description: 'Trade wealth for Vitale' },
-            { label: 'Sciatic League', value: 'sciatic', description: 'Exotic goods and trade routes' },
-            { label: 'Caossa', value: 'caossa', description: 'Ores and worked metal' }
-        );
-
-    return interaction.editReply({ embeds: [emb], components: [
-        new ActionRowBuilder().addComponents(factionMenu)
-    ]});
+    return interaction.editReply({ embeds: [emb], components: [] });
 }
 
 async function renderEmpireEmbed(db) {
@@ -392,7 +381,7 @@ async function renderEmpireEmbed(db) {
 
     // Styx Empire stats
     const STYX_HOUSES = ['TYRANNITE', 'RHAGAIA', 'SELLESELA', 'GAIUS', 'CAOSSA'];
-    const styxPlayers = await db.all("SELECT id, mil_militia, mil_spearmen, mil_swordsman, mil_shield, mil_cavalry, mil_ranged, mil_siege, nation FROM users WHERE status='active'");
+    const styxPlayers = await db.all("SELECT id, mil_militia, mil_spearmen, mil_swordsman, mil_shield, mil_cavalry, mil_ranged, mil_siege, nation, ruler_name, username FROM users WHERE status='active'");
     const { ANCESTRIES } = require('../../data/constants');
     let vassalCount = 0, totalStyxMil = 0;
     const vassalNames = [];
@@ -402,7 +391,8 @@ async function renderEmpireEmbed(db) {
         if (house && STYX_HOUSES.includes(house)) {
             vassalCount++;
             totalStyxMil += (p.mil_militia||0)+(p.mil_spearmen||0)+(p.mil_swordsman||0)+(p.mil_shield||0)+(p.mil_cavalry||0)+(p.mil_ranged||0)+(p.mil_siege||0);
-            if (p.nation) vassalNames.push(p.nation);
+            const name = p.ruler_name || p.username || 'Unknown';
+            vassalNames.push(p.nation ? `${name} of ${p.nation}` : name);
         }
     }
     const vassalStr = vassalCount > 0 ? `${vassalCount} vassal(s) | ⚔️ ${totalStyxMil} total military` : 'No vassals sworn';
@@ -504,17 +494,17 @@ async function handleModal(interaction, action, args) {
         });
         return interaction.reply({ content: `✅ Trade complete: Gave **${giveAmt} ${giveRes}** → Received **${recvAmt} ${recvRes}** from <@${partnerId}>.`, ephemeral: true });
     }
-    if (action === 'empire' && args[0] === 'factionmodal') {
+    if (action === 'trade' && args[0] === 'facmod') {
         const userId = args[1];
         const faction = args[2];
-        const giveRes = interaction.fields.getTextInputValue('give_res')?.trim().toLowerCase();
+        const giveRes = args[3];
+        const recvRes = args[4];
         const giveAmt = parseInt(interaction.fields.getTextInputValue('give_amt'));
-        const recvRes = interaction.fields.getTextInputValue('recv_res')?.trim().toLowerCase();
-        if (!giveRes || !recvRes || isNaN(giveAmt) || giveAmt <= 0)
+        if (isNaN(giveAmt) || giveAmt <= 0)
             return interaction.reply({ content: '⚠️ Invalid input.', ephemeral: true });
 
         const user = await db.get('SELECT * FROM users WHERE id=?', userId);
-        if ((user[giveRes] || 0) < giveAmt) return interaction.reply({ content: `⚠️ Insufficient ${giveRes}.`, ephemeral: true });
+        if ((user[giveRes] || 0) < giveAmt) return interaction.reply({ content: `⚠️ Insufficient ${giveRes.replace('_surplus','')}.`, ephemeral: true });
 
         // Relation gates
         if (faction === 'sciatic') {
@@ -530,7 +520,7 @@ async function handleModal(interaction, action, args) {
             "INSERT INTO trade_routes (initiator_id, partner_id, partner_type, give_resource, give_amount, receive_resource, receive_amount, duration_turns, turns_remaining, status) VALUES (?,NULL,?,?,?,?,?,?,?,'active')",
             userId, faction, giveRes, giveAmt, recvRes, 0, 1, 1
         );
-        return interaction.reply({ content: `✅ Trade route established with **${faction}**! Give ${giveAmt} ${giveRes} → receive ${recvRes} from them. Use \`/atlas trade\` to manage routes.`, ephemeral: true });
+        return interaction.reply({ content: `✅ Trade route established with **${faction.charAt(0).toUpperCase() + faction.slice(1)}**! Give ${giveAmt} ${giveRes.replace('_surplus','')} → receive ${recvRes.replace('_surplus','')} from them. Use \`/atlas trade\` to manage routes.`, ephemeral: true });
     }
 
     // Trade: Give modal submit
@@ -629,7 +619,18 @@ async function handleSelect(interaction, action, args) {
             const tradeMod = require('./trade');
             return await tradeMod.handleTradeRouteList(interaction);
         }
-        if (val === 'new') return interaction.reply({ content: 'Use `/atlas empire` and select a faction to trade with. For player routes, select a player above.', ephemeral: true });
+        if (val === 'new') {
+            await interaction.deferUpdate();
+            const factionMenu = new StringSelectMenuBuilder()
+                .setCustomId(`trade_facsel_${userId}`)
+                .setPlaceholder('Select faction...')
+                .addOptions(
+                    { label: 'Styx Empire (Vitale)', value: 'styx' },
+                    { label: 'Sciatic League', value: 'sciatic' },
+                    { label: 'Caossa', value: 'caossa' }
+                );
+            return interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🏛️ Faction Trade').setColor(0x00BFFF).setDescription('Select a faction to establish a route with.')], components: [new ActionRowBuilder().addComponents(factionMenu)] });
+        }
         if (val === 'newplayer') {
             const uid = args[1];
             const players = await getActivePlayers(db, uid);
@@ -663,6 +664,64 @@ async function handleSelect(interaction, action, args) {
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('recv_res').setLabel('Resource you receive').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('food_surplus')),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('recv_amt').setLabel('Amount per turn').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('50')),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('duration').setLabel('Duration (1-10 turns)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('3'))
+        );
+        return await interaction.showModal(modal);
+    }
+
+    if (action === 'trade' && args[0] === 'facsel') {
+        const userId = args[1];
+        const faction = interaction.values[0];
+        if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this may use it.', ephemeral: true });
+        
+        await interaction.deferUpdate();
+        const resMenu = new StringSelectMenuBuilder()
+            .setCustomId(`trade_facgive_${userId}_${faction}`)
+            .setPlaceholder('Select resource you GIVE...')
+            .addOptions([
+                { label: '💰 Balance', value: 'balance' },
+                { label: '⚖️ Wealth', value: 'wealth' },
+                { label: '🥩 Food', value: 'food_surplus' },
+                { label: '⚒️ Ores', value: 'ores' },
+                { label: '🔩 Metallurgy', value: 'metallurgy' },
+                { label: '🍷 Exotics', value: 'exotics' }
+            ]);
+        return interaction.editReply({ embeds: [new EmbedBuilder().setTitle(`🤝 Trade with ${faction.charAt(0).toUpperCase() + faction.slice(1)}`).setColor(0x00BFFF).setDescription('What resource will you give?')], components: [new ActionRowBuilder().addComponents(resMenu)] });
+    }
+
+    if (action === 'trade' && args[0] === 'facgive') {
+        const userId = args[1];
+        const faction = args[2];
+        const giveRes = interaction.values[0];
+        if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this may use it.', ephemeral: true });
+
+        await interaction.deferUpdate();
+        const resMenu = new StringSelectMenuBuilder()
+            .setCustomId(`trade_facrecv_${userId}_${faction}_${giveRes}`)
+            .setPlaceholder('Select resource you WANT...')
+            .addOptions([
+                { label: '💰 Balance', value: 'balance' },
+                { label: '⚖️ Wealth', value: 'wealth' },
+                { label: '🥩 Food', value: 'food_surplus' },
+                { label: '⚒️ Ores', value: 'ores' },
+                { label: '🔩 Metallurgy', value: 'metallurgy' },
+                { label: '💧 Vitale', value: 'vitale' },
+                { label: '🍷 Exotics', value: 'exotics' }
+            ]);
+        return interaction.editReply({ embeds: [new EmbedBuilder().setTitle(`🤝 Trade with ${faction.charAt(0).toUpperCase() + faction.slice(1)}`).setColor(0x00BFFF).setDescription('What resource do you want in return?')], components: [new ActionRowBuilder().addComponents(resMenu)] });
+    }
+
+    if (action === 'trade' && args[0] === 'facrecv') {
+        const userId = args[1];
+        const faction = args[2];
+        const giveRes = args[3];
+        const recvRes = interaction.values[0];
+        if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this may use it.', ephemeral: true });
+
+        const modal = new ModalBuilder()
+            .setCustomId(`trade_facmod_${userId}_${faction}_${giveRes}_${recvRes}`)
+            .setTitle(`Give ${giveRes.replace('_surplus','')} for ${recvRes.replace('_surplus','')}`);
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('give_amt').setLabel(`Amount of ${giveRes.replace('_surplus','')} to give`).setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('100'))
         );
         return await interaction.showModal(modal);
     }

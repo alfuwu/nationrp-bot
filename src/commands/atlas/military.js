@@ -402,7 +402,8 @@ async function handleFormationSubmit(interaction, uid, targetId, formationKey, m
     const terrainKey = terrainKeys[Math.floor(Math.random() * terrainKeys.length)];
     const formation = FORMATIONS[formationKey];
     const action = mode === 'siege' ? 'SIEGE' : 'BATTLE';
-    const title = mode === 'siege' ? `🏰 Siege: ${townName || 'Unknown'}` : `⚔️ Battle against <@${targetId}>`;
+    const defNameStr = def ? (def.ruler_name ? `${def.ruler_name} (@${def.username})` : `@${def.username}`) : `<@${targetId}>`;
+    const title = mode === 'siege' ? `🏰 Siege: ${townName || 'Unknown'}` : `⚔️ Battle against ${defNameStr}`;
 
     const emb = new EmbedBuilder()
         .setTitle(title)

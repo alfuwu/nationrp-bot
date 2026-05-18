@@ -71,7 +71,6 @@ async function handleDiplomacy(interaction) {
 
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`diplo_treaties_${userId}`).setLabel('View Treaties').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(`diplo_routes_${userId}`).setLabel('View Trade Routes').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`diplo_treaty_${userId}`).setLabel('Propose Treaty').setStyle(ButtonStyle.Success)
     );
     const row2 = new ActionRowBuilder().addComponents(
@@ -188,7 +187,7 @@ async function handleViewTreaties(interaction, userId) {
     for (const t of treaties) {
         if (t.status === 'active') {
             components.push(new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`diplo_endtreaty_${t.id}_${userId}`).setLabel(`End #${t.id} (3-day)`).setStyle(ButtonStyle.Danger)
+                new ButtonBuilder().setCustomId(`diplo_endtreaty_${userId}_${t.id}`).setLabel(`End #${t.id} (3-day)`).setStyle(ButtonStyle.Danger)
             ));
         }
     }

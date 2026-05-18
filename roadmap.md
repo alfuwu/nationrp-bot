@@ -2,18 +2,6 @@
 
 This document outlines complex systems and future expansions for the Atlas bot. High-complexity tasks are recommended for advanced reasoning models.
 
-## ✅ [DONE] 🏆 Complex Leaderboard & Scoring System
-- **Objective**: Implement a multi-category leaderboard based on calculated nation scores.
-- **Status**: **Implemented v1.1.0**. Includes core dimensions (Economy, Defense, Stability, Prestige, Offense).
-- **Note**: Trade and Knowledge remain WIP placeholders within the engine.
-
-## ✅ [DONE] 📡 Advanced Scouting Mechanic
-- **Objective**: Contest between Attacker's Offense and Target's Defense.
-- **Status**: **Implemented v1.1.1**. Formula: `(1d20 + Attacker Offense Score) >= (10 + Target Defense Score)`.
-- **Note**: Replaces plot-based DC system.
-
----
-
 ## ✅ [IN PROGRESS] 📈 Advanced Economic Simulation
 **Recommended Model**: Claude Sonnet 4.5
 - **Status**: **Phase 1 Implemented v1.2.0**.

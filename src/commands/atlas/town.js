@@ -240,8 +240,9 @@ async function handleModal(interaction, action, args) {
         const user = await db.get('SELECT wealth FROM users WHERE id = ?', interaction.user.id);
         const settlements = await db.all('SELECT id FROM towns WHERE user_id = ?', interaction.user.id);
         const cost = settlements.length > 0 ? 5000 : 0;
+        const requiredWealth = settlements.length > 0 ? 5000 : 1000;
 
-        if ((user.wealth || 0) < cost) return interaction.editReply({ content: `⚠️ You need **${cost.toLocaleString()} ⚖️ Wealth** to found a new settlement.` });
+        if ((user.wealth || 0) < requiredWealth) return interaction.editReply({ content: `⚠️ You need at least **${requiredWealth.toLocaleString()} ⚖️ Wealth** in your bank to found a new settlement.` });
 
         const check = await db.get('SELECT id FROM towns WHERE LOWER(name) = ?', name.toLowerCase());
         if (check) return interaction.editReply({ content: '⚠️ Settlement name already exists.' });
