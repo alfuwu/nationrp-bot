@@ -92,15 +92,17 @@ function initScheduler(client) {
                 }
 
                 let delta = 0;
-                // Tiered pop growth based on food surplus level
+                // Tiered pop growth based on food surplus level.
+                // Rates tuned for medieval realism — still compressed vs real history
+                // but won't double a town's population in a month.
                 if (food >= 1000 && currentPop < popCap) {
-                    delta = Math.max(1, Math.floor(currentPop * 0.02));   // Abundant: 2%/day
+                    delta = Math.max(1, Math.floor(currentPop * 0.005));  // Abundant:     +0.5%/day
                 } else if (food >= 200 && currentPop < popCap) {
-                    delta = Math.max(1, Math.floor(currentPop * 0.015));  // Comfortable: 1.5%/day
+                    delta = Math.max(1, Math.floor(currentPop * 0.003));  // Comfortable:  +0.3%/day
                 } else if (food > 0 && currentPop < popCap) {
-                    delta = Math.max(1, Math.floor(currentPop * 0.01));   // Subsisting: 1%/day
+                    delta = Math.max(1, Math.floor(currentPop * 0.0015)); // Subsisting:  +0.15%/day
                 } else if (food <= 0) {
-                    delta = -Math.max(1, Math.floor(currentPop * 0.01));  // Famine: -1%/day
+                    delta = -Math.max(1, Math.floor(currentPop * 0.01)); // Famine:       −1%/day
                 }
                 delta = Math.min(delta, popCap - currentPop); // don't exceed cap
 
@@ -156,7 +158,10 @@ function initScheduler(client) {
                 };
                 const newMaintCost = calcMaintenance(postDesertion);
 
-                // Apply all updates in one query
+                // tax_notified lifecycle: economy.js resets → 0 on each tax collect;
+                // hourly notifier sets → 1 after sending. Do NOT reset here — that
+                // caused the midnight cron to re-arm notifications for players whose
+                // 24h cooldown hadn't elapsed yet, firing a premature "tax ready" ping.
                 await db.run(`
                     UPDATE users SET
                         pop_commoners         = MAX(0, pop_commoners + ?),
@@ -169,8 +174,7 @@ function initScheduler(client) {
                         mil_ranged            = MAX(0, mil_ranged    - ?),
                         mil_siege             = MAX(0, mil_siege     - ?),
                         mercs_temp            = MAX(0, mercs_temp    - ?),
-                        mil_maintenance_cost  = ?,
-                        tax_notified          = 0
+                        mil_maintenance_cost  = ?
                     WHERE id = ?`,
                     delta,
                     foodAfterMil,

@@ -2,7 +2,91 @@
 
 This file contains all merged update logs, changelogs, patch notes, and archived tickets for reference.
 
+---
 
+## [1.4.0] — 2026-05-26
+
+### Fixed
+
+- **Demolish Menu — Duplicate Option Values (`DiscordAPIError 50035`)**
+  The Demolish dropdown in `/atlas town` crashed with `COMPONENT_OPTION_VALUE_DUPLICATED` whenever a
+  town had more than one building of the same type (e.g., two Taverns). The select menu was using the
+  building `type` string as the option `value`, which is not unique across rows. Fixed by using the
+  building's database `id` as the option value. Duplicate types now also appear labelled as
+  `Tavern #1`, `Tavern #2` etc. so players can distinguish them. Deletion now targets by `id` directly
+  — no risk of accidentally removing the wrong building.
+
+- **Warfare — Broken Guard Conditions**
+  The automated ephemeral-reply migration script from v1.3.1 incorrectly stripped `if (condition)`
+  guards from modal submit handlers in `warfare.js`, turning conditional error returns into
+  unconditional ones. This caused every field battle, siege, and raid modal to immediately error
+  out without processing. All guard conditions have been fully restored across the rewritten modules.
+
+- **Tax Notification Race Condition**
+  The midnight daily cron was unconditionally resetting `tax_notified = 0` for all players, which
+  re-armed notifications mid-cooldown and caused the bot to ping players before their tax was actually
+  ready. The reset is now removed from the midnight cron; `tax_notified` is only reset to `0` after a
+  player successfully collects tax (handled in `economy.js`).
+
+### Added
+
+- **Servus in Sciatic League Faction Trade**
+  `Servus (🔗)` is now available as both a give and receive resource in the Sciatic League faction
+  trade route dropdown, consistent with all other factions.
+
+- **Faction Trade Open Access (Embargo Gate)**
+  Faction trade routes no longer require positive relations. Any player can initiate a trade route
+  with any faction. However, if a player's relation score with a faction falls to **≤ −10 (Hostile)**,
+  that faction will automatically embargo the player and block all trade until relations recover above
+  that threshold.
+
+- **`ephemeralReply` Helper — Full Adoption**
+  The `ephemeralReply` helper (which uses `followUp` instead of `reply` on component interactions,
+  preventing the "original message deleted" artefact) has been applied to every button, select, and
+  modal handler across all feature modules: `action.js`, `colosseum.js`, `military.js`, `warfare.js`,
+  `economy.js`, `diplomacy.js`, `trade.js`.
+
+### Changed
+
+- **`warfare.js` Modularized into Three Sub-modules**
+  The monolithic `warfare.js` (1041 lines) has been split into focused, maintainable files:
+
+  | File | Responsibility | ~Lines |
+  |---|---|---|
+  | [`warfare.js`](src/commands/atlas/warfare.js) | Shared constants, combat math (`calcArmyPower`, `calcOffenseScore`, etc.), button/modal router, `handleRebellionEvent` | ~230 |
+  | [`warfare_battle.js`](src/commands/atlas/warfare_battle.js) | Field battle lifecycle — initiation → composition modal → GM naming → defender commit → resolution → substat reward | ~320 |
+  | [`warfare_siege.js`](src/commands/atlas/warfare_siege.js) | Siege lifecycle — initiation → GM confirmation → resolution → building destruction | ~190 |
+  | [`warfare_raid.js`](src/commands/atlas/warfare_raid.js) | Raid lifecycle — initiation → GM approval → Phase 1 combat → player withdraw/press decision → Phase 2 resolution → loot | ~220 |
+
+  Public API is unchanged — `interactionCreate.js` and `atlas.js` continue to `require('./warfare')`
+  and call the same exported functions. Sub-modules are lazy-loaded to prevent circular require issues.
+
+- **`README.md` Rewritten**
+  The placeholder README (7 lines) has been replaced with a full professional document covering:
+  quick start, environment variable table, complete feature overview table, annotated project
+  structure tree, and architecture rules (migration policy, ephemeral reply convention, SQL safety
+  rules, file-size limit, Discord API limits).
+
+### Balance
+
+- **Population Growth — Rates Reduced for Medieval Realism**
+  The previous growth rates caused a starting town of 100 commoners to exceed 1,300 in 30 days,
+  which was unrealistic even for a compressed game-time setting. All growth tiers reduced:
+
+  | Tier | Condition | Old rate | New rate |
+  |---|---|---|---|
+  | Abundant | food ≥ 1,000 | +2.0%/day | **+0.5%/day** |
+  | Comfortable | food ≥ 200 | +1.5%/day | **+0.3%/day** |
+  | Subsisting | food > 0 | +1.0%/day | **+0.15%/day** |
+  | Famine | food ≤ 0 | −1.0%/day | −1.0%/day *(unchanged)* |
+
+  At the new abundant rate, a town of 100 reaches ~200 in ~140 days — far more consistent with
+  a medieval nation-building timeline.
+
+- **Tavern — Food Cost Removed**
+  Tavern had `food_cost: 100/day` — identical to a fully garrisoned Castle. A drinking
+  establishment drawing the same ration supply as a military fortress made no logical sense.
+  Food cost set to `0`. Tavern remains a pure wealth generator (`+30 ⚖️/day`).
 
 ---
 

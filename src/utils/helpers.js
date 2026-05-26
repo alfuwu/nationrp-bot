@@ -1,7 +1,7 @@
 const { ANCESTRIES, UPBRINGINGS, PROFESSIONS, STAT_MAPPING, VITALE_FREE_HOUSES, GREAT_HOUSES, PLAYER_RANKS } = require('../data/constants');
 
 const OWNER_ID = process.env.OWNER_ID || '317883862258548737';
-const STAT_KEYS = ['str', 'mot', 'men', 'int', 'wis', 'cha'];
+// STAT_KEYS ({ str: 'attr_str', ... }) is exported from constants.js — import from there directly.
 const BASE_STAT = 10;
 
 // ─── Character math ───────────────────────────────────────────────────────────
@@ -229,17 +229,55 @@ async function getActivePlayers(db, excludeId) {
 }
 
 /**
+ * ephemeralReply — sends an ephemeral message without anchoring it to the source message.
+ *
+ * Problem: When a button/select handler calls interaction.reply({ ephemeral: true }),
+ * Discord links that ephemeral to the original message. When the user dismisses it,
+ * Discord shows "the original message was deleted" — even though it wasn't.
+ *
+ * Fix: For component interactions (buttons, select menus), use interaction.followUp()
+ * instead of interaction.reply(). followUp posts the ephemeral as a free-floating
+ * message, so dismissing it never affects the source message.
+ *
+ * For slash commands and modals, reply() is correct and is used unchanged.
+ *
+ * @param {Interaction} interaction
+ * @param {string|object} options  — string or reply options object
+ */
+async function ephemeralReply(interaction, options) {
+    const payload = typeof options === 'string' ? { content: options, ephemeral: true } : options;
+
+    // ComponentTypes: Button=2, StringSelect=3, UserSelect=5, RoleSelect=6,
+    // MentionableSelect=7, ChannelSelect=8
+    const COMPONENT_TYPES = new Set([2, 3, 5, 6, 7, 8]);
+    const isComponent = COMPONENT_TYPES.has(interaction.componentType);
+
+    try {
+        if (isComponent) {
+            // Acknowledge the component click silently (keeps original message intact),
+            // then post the ephemeral as a standalone followUp.
+            if (!interaction.deferred && !interaction.replied) {
+                await interaction.deferUpdate();
+            }
+            return await interaction.followUp({ ...payload, ephemeral: true });
+        }
+        // Slash command / modal: reply() is correct here.
+        if (interaction.deferred || interaction.replied) {
+            return await interaction.editReply(payload);
+        }
+        return await interaction.reply({ ...payload, ephemeral: true });
+    } catch (e) { console.error('[ATLAS] ephemeralReply failed:', e.message); }
+}
+
+/**
  * safeReply — gracefully reply or editReply to a deferred/replied interaction.
  * Use inside catch blocks for warfare/economy handlers.
+ * Uses ephemeralReply so button-triggered errors also avoid the "deleted" bug.
  */
 async function safeReply(interaction, options) {
-    try {
-        if (interaction.deferred || interaction.replied) {
-            return await interaction.editReply(typeof options === 'string' ? { content: options } : options);
-        }
-        return await interaction.reply(typeof options === 'string' ? { content: options, ephemeral: true } : options);
-    } catch (e) { console.error('[ATLAS] safeReply failed:', e.message); }
+    return await ephemeralReply(interaction, options);
 }
+
 
 // ─── Army maintenance ─────────────────────────────────────────────────────────
 
@@ -439,17 +477,17 @@ async function initDB(db) {
 }
 
 module.exports = {
-    OWNER_ID, STAT_KEYS, BASE_STAT,
+    OWNER_ID, BASE_STAT,
     getMod, fmtMod, isOwner, isGM, resolveAtlasHQ,
     applyBoost, applyBoosts, buildBaseAttributes, decodeFreeDist,
     calcStabMultiplier, getCharBonuses, calcNobleState,
     getWarningLevel, formatWarningBanner,
     getPlayerRank, isVitaleFree, getNotificationChannel,
     sendToPlayer, getActivePlayers,
-    safeReply,
+    safeReply, ephemeralReply,
     calcMorale,
     calcMaintenance,
     initDB,
     GREAT_HOUSES, PLAYER_RANKS, VITALE_FREE_HOUSES
-    // Note: STAT_MAPPING and STAT_KEYS are importable directly from '../../data/constants'
+    // Note: STAT_MAPPING and STAT_KEYS are importable directly from '../data/constants'
 };

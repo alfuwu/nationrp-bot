@@ -3,7 +3,7 @@ const {
     StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle
 } = require('discord.js');
 const { TERRAINS, DUEL_STANCES, DUEL_TERRAIN_MODS } = require('../../data/constants');
-const { calcMorale, getMod, sendToPlayer, safeReply } = require('../../utils/helpers');
+const { calcMorale, getMod, sendToPlayer, safeReply, ephemeralReply } = require('../../utils/helpers');
 
 const hpBar = (hp) => '🟩'.repeat(Math.max(0, Math.min(10, hp))) + '🟥'.repeat(Math.max(0, 10 - Math.min(10, hp)));
 
@@ -124,12 +124,12 @@ async function handleSelect(interaction, action, args) {
     if (action === 'colo') {
         const sub = args[0];
         const uid = args[1];
-        if (interaction.user.id !== uid) return interaction.reply({ content: '⚠️ Only the player who opened this may use it.', ephemeral: true });
+        if (interaction.user.id !== uid) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
 
         // Challenge: player selected → defender picks terrain on accept
         if (sub === 'challenge') {
             const targetId = interaction.values[0];
-            if (targetId === 'none' || targetId === interaction.user.id) return interaction.reply({ content: '⚠️ Invalid target.', ephemeral: true });
+            if (targetId === 'none' || targetId === interaction.user.id) return ephemeralReply(interaction, '⚠️ Invalid target.');
             await interaction.deferUpdate();
 
             const challenger = await db.get('SELECT * FROM users WHERE id=?', uid);
@@ -183,11 +183,11 @@ async function handleSelect(interaction, action, args) {
             const duelId = parseInt(args[2]);
             const terrain = interaction.values[0];
             const duel = await db.get('SELECT * FROM duels WHERE id=?', duelId);
-            if (!duel || duel.status !== 'pending') return interaction.reply({ content: '⚠️ Duel no longer available.', ephemeral: true });
-            if (interaction.user.id !== duel.defender_id) return interaction.reply({ content: '⚠️ Only the defender may pick terrain.', ephemeral: true });
+            if (!duel || duel.status !== 'pending') return ephemeralReply(interaction, '⚠️ Duel no longer available.');
+            if (interaction.user.id !== duel.defender_id) return ephemeralReply(interaction, '⚠️ Only the defender may pick terrain.');
 
             await db.run("UPDATE duels SET terrain=?, status='active' WHERE id=?", terrain, duelId);
-            await interaction.reply({ content: `✅ Terrain set to **${TERRAINS[terrain]?.name || terrain}**. The duel begins!`, ephemeral: true });
+            await ephemeralReply(interaction, `✅ Terrain set to **${TERRAINS[terrain]?.name || terrain}**. The duel begins!`);
 
             // Post odds to colosseum
             const challenger = await db.get('SELECT * FROM users WHERE id=?', duel.challenger_id);
@@ -229,19 +229,19 @@ async function handleSelect(interaction, action, args) {
         // My Duels: view details or start round
         if (sub === 'myduels') {
             const val = interaction.values[0];
-            if (val === 'none') return interaction.reply({ content: 'No duels found.', ephemeral: true });
+            if (val === 'none') return ephemeralReply(interaction, 'No duels found.');
             if (val.startsWith('cancel_')) {
                 const duelId = parseInt(val.replace('cancel_', ''));
                 const duel = await db.get('SELECT * FROM duels WHERE id=?', duelId);
-                if (!duel || duel.challenger_id !== uid) return interaction.reply({ content: '⚠️ Only the challenger may cancel.', ephemeral: true });
-                if (duel.status === 'completed') return interaction.reply({ content: '⚠️ Duel already completed.', ephemeral: true });
+                if (!duel || duel.challenger_id !== uid) return ephemeralReply(interaction, '⚠️ Only the challenger may cancel.');
+                if (duel.status === 'completed') return ephemeralReply(interaction, '⚠️ Duel already completed.');
                 await db.run("UPDATE duels SET status='rejected' WHERE id=?", duelId);
-                await interaction.reply({ content: `❌ **${duel.name || 'Duel'}** cancelled.`, ephemeral: true });
+                await ephemeralReply(interaction, `❌ **${duel.name || 'Duel'}** cancelled.`);
                 return;
             }
             const duelId = parseInt(val.replace('view_', ''));
             const duel = await db.get('SELECT * FROM duels WHERE id=?', duelId);
-            if (!duel) return interaction.reply({ content: 'Duel not found.', ephemeral: true });
+            if (!duel) return ephemeralReply(interaction, 'Duel not found.');
             await interaction.deferUpdate();
 
             if (duel.status === 'pending')
@@ -271,11 +271,11 @@ async function handleSelect(interaction, action, args) {
         if (sub === 'bet') {
             const uid = interaction.user.id;
             const val = interaction.values[0];
-            if (val === 'none') return interaction.reply({ content: 'No duels to bet on.', ephemeral: true });
+            if (val === 'none') return ephemeralReply(interaction, 'No duels to bet on.');
             const duelId = parseInt(val.replace('bet_', ''));
             const duel = await db.get('SELECT * FROM duels WHERE id=?', duelId);
-            if (!duel || duel.status === 'completed') return interaction.reply({ content: 'Duel not available for betting.', ephemeral: true });
-            if (uid === duel.challenger_id || uid === duel.defender_id) return interaction.reply({ content: '⚠️ Cannot bet on your own duel.', ephemeral: true });
+            if (!duel || duel.status === 'completed') return ephemeralReply(interaction, 'Duel not available for betting.');
+            if (uid === duel.challenger_id || uid === duel.defender_id) return ephemeralReply(interaction, '⚠️ Cannot bet on your own duel.');
 
             const modal = new ModalBuilder().setCustomId(`colo_betmod_${duelId}_${uid}`).setTitle('💰 Place Bet');
             modal.addComponents(
@@ -305,17 +305,17 @@ async function handleModal(interaction, action, args) {
         const amt = parseInt(interaction.fields.getTextInputValue('amt'));
         const betOn = interaction.fields.getTextInputValue('bet_on')?.trim().toLowerCase();
 
-        if (isNaN(amt) || amt <= 0) return interaction.reply({ content: '⚠️ Invalid amount.', ephemeral: true });
-        if (!['c', 'd'].includes(betOn)) return interaction.reply({ content: "⚠️ Use 'c' for challenger, 'd' for defender.", ephemeral: true });
+        if (isNaN(amt) || amt <= 0) return ephemeralReply(interaction, '⚠️ Invalid amount.');
+        if (!['c', 'd'].includes(betOn)) return ephemeralReply(interaction, "⚠️ Use 'c' for challenger, 'd' for defender.");
 
         const user = await db.get('SELECT balance FROM users WHERE id=?', uid);
         const maxBet = Math.floor((user.balance || 0) * 0.10);
-        if (amt > maxBet) return interaction.reply({ content: `⚠️ Max bet is 10% of balance: **${maxBet} :coin:**.`, ephemeral: true });
+        if (amt > maxBet) return ephemeralReply(interaction, `⚠️ Max bet is 10% of balance: **${maxBet} :coin:**.`);
 
         const duel = await db.get('SELECT * FROM duels WHERE id=?', duelId);
-        if (!duel || duel.status === 'completed') return interaction.reply({ content: '⚠️ Duel not available.', ephemeral: true });
-        if (uid === duel.challenger_id || uid === duel.defender_id) return interaction.reply({ content: '⚠️ Cannot bet on your own duel.', ephemeral: true });
-        if (duel.challenger_stance && duel.defender_stance) return interaction.reply({ content: '⚠️ Bets closed — stances already locked.', ephemeral: true });
+        if (!duel || duel.status === 'completed') return ephemeralReply(interaction, '⚠️ Duel not available.');
+        if (uid === duel.challenger_id || uid === duel.defender_id) return ephemeralReply(interaction, '⚠️ Cannot bet on your own duel.');
+        if (duel.challenger_stance && duel.defender_stance) return ephemeralReply(interaction, '⚠️ Bets closed — stances already locked.');
 
         const challenger = await db.get('SELECT * FROM users WHERE id=?', duel.challenger_id);
         const defender   = await db.get('SELECT * FROM users WHERE id=?', duel.defender_id);
@@ -329,7 +329,7 @@ async function handleModal(interaction, action, args) {
         await db.run('INSERT INTO bets (duel_id, bettor_id, amount, bet_on, odds, created_at) VALUES (?,?,?,?,?,?)',
             duelId, uid, amt, betOn, odds, Date.now());
 
-        return interaction.reply({ content: `💰 Bet **${amt} :coin:** on **${betOn === 'c' ? 'Challenger' : 'Defender'}** at **${odds.toFixed(1)}x** odds.`, ephemeral: true });
+        return ephemeralReply(interaction, `💰 Bet **${amt} :coin:** on **${betOn === 'c' ? 'Challenger' : 'Defender'}** at **${odds.toFixed(1)}x** odds.`);
     }
 }
 
@@ -441,15 +441,15 @@ async function handleStanceSelect(interaction, duelId, playerRole, chosenStance)
     const db = interaction.client.db;
     try {
         const stance = DUEL_STANCES[chosenStance];
-        if (!stance) return interaction.reply({ content: '⚠️ Invalid stance.', ephemeral: true });
+        if (!stance) return ephemeralReply(interaction, '⚠️ Invalid stance.');
 
         const duel = await db.get('SELECT * FROM duels WHERE id=?', duelId);
-        if (!duel || duel.status !== 'active') return interaction.reply({ content: '⚠️ Duel not found.', ephemeral: true });
+        if (!duel || duel.status !== 'active') return ephemeralReply(interaction, '⚠️ Duel not found.');
 
         const uid = interaction.user.id;
         const isChallenger = playerRole === 'c';
-        if (isChallenger && uid !== duel.challenger_id) return interaction.reply({ content: '⚠️ Only the challenger may pick.', ephemeral: true });
-        if (!isChallenger && uid !== duel.defender_id) return interaction.reply({ content: '⚠️ Only the defender may pick.', ephemeral: true });
+        if (isChallenger && uid !== duel.challenger_id) return ephemeralReply(interaction, '⚠️ Only the challenger may pick.');
+        if (!isChallenger && uid !== duel.defender_id) return ephemeralReply(interaction, '⚠️ Only the defender may pick.');
 
         // Store stance
         if (isChallenger) {
@@ -458,7 +458,7 @@ async function handleStanceSelect(interaction, duelId, playerRole, chosenStance)
             await db.run("UPDATE duels SET defender_stance=? WHERE id=?", chosenStance, duelId);
         }
 
-        await interaction.reply({ content: `✅ Stance locked: **${stance.name}**. Waiting for opponent...`, ephemeral: true });
+        await ephemeralReply(interaction, `✅ Stance locked: **${stance.name}**. Waiting for opponent...`);
 
         // Check if both stances are in
         const refreshed = await db.get('SELECT * FROM duels WHERE id=?', duelId);

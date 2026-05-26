@@ -133,10 +133,18 @@ async function handleButton(interaction, action, args) {
         if (sub === 'demolishmenu') {
             await interaction.deferUpdate();
             const town = await db.get('SELECT * FROM towns WHERE id = ?', townId);
-            const bldgs = await db.all('SELECT type FROM buildings WHERE town_id = ?', townId);
+            const bldgs = await db.all('SELECT id, type FROM buildings WHERE town_id = ? ORDER BY type, id', townId);
             if (!bldgs.length) return interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🔴 DEMOLISH STRUCTURE').setColor(0xFF0000).setDescription('⚠️ No structures exist to demolish in this settlement.')], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`town_back_${townId}`).setLabel('← Back').setStyle(ButtonStyle.Secondary))] });
-            
-            const menu = new StringSelectMenuBuilder().setCustomId(`town_demolishsel_${townId}`).setPlaceholder('Select a structure...').addOptions(bldgs.slice(0, 25).map(b => ({ label: `${BUILDINGS[b.type.toUpperCase()]?.name || b.type}`, value: b.type })));
+
+            // Use building `id` as the option value to guarantee uniqueness even when
+            // a town has multiple buildings of the same type.
+            const typeCount = {};
+            const menu = new StringSelectMenuBuilder().setCustomId(`town_demolishsel_${townId}`).setPlaceholder('Select a structure...').addOptions(bldgs.slice(0, 25).map(b => {
+                const baseName = BUILDINGS[b.type.toUpperCase()]?.name || b.type;
+                typeCount[b.type] = (typeCount[b.type] || 0) + 1;
+                const label = typeCount[b.type] > 1 ? `${baseName} #${typeCount[b.type]}` : baseName;
+                return { label, value: String(b.id) };
+            }));
             return interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🔴 DEMOLISH STRUCTURE').setColor(0xFF4444).setDescription(`**${town.name}**`)], components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`town_back_${townId}`).setLabel('← Back').setStyle(ButtonStyle.Secondary))] });
         }
 
@@ -205,16 +213,35 @@ async function handleButton(interaction, action, args) {
     
     if (action === 'demolishconfirm') {
         const townId = args[0];
-        const bType = args.slice(1).join('_');
         await interaction.deferUpdate();
-        const bData = BUILDINGS[bType.toUpperCase()];
+
+        let bldgId = null;
+        let bType  = null;
+
+        if (args[1] === 'id') {
+            // New path: args = [townId, 'id', bldgId] — delete by unique row id
+            bldgId = parseInt(args[2]);
+            const row = await db.get('SELECT type FROM buildings WHERE id=? AND town_id=?', bldgId, townId);
+            if (!row) return interaction.editReply({ content: '⚠️ Building no longer exists.', components: [] });
+            bType = row.type.toUpperCase();
+        } else {
+            // Legacy path: args = [townId, TYPE] — kept for backwards compat with any in-flight interactions
+            bType = args.slice(1).join('_').toUpperCase();
+        }
+
+        const bData = BUILDINGS[bType];
         const refund = Math.floor((bData?.cost || 0) * 0.5);
         await db.run('UPDATE users SET wealth = wealth + ? WHERE id = ?', refund, interaction.user.id);
-        // Delete only ONE row of the specified type
-        await db.run(
-            'DELETE FROM buildings WHERE rowid = (SELECT rowid FROM buildings WHERE town_id = ? AND type = ? LIMIT 1)',
-            townId, bType.toLowerCase()
-        );
+
+        if (bldgId) {
+            await db.run('DELETE FROM buildings WHERE id=?', bldgId);
+        } else {
+            // Legacy: delete only ONE row matching the type
+            await db.run(
+                'DELETE FROM buildings WHERE rowid = (SELECT rowid FROM buildings WHERE town_id=? AND UPPER(type)=? LIMIT 1)',
+                townId, bType
+            );
+        }
         return await renderTownView(interaction, townId);
     }
 }
@@ -310,12 +337,15 @@ async function handleSelect(interaction, action, args) {
         
         if (sub === 'demolishsel') {
             await interaction.deferUpdate();
-            const bType = interaction.values[0];
-            const bd = BUILDINGS[bType.toUpperCase()];
+            // Value is the building's unique DB id (not type)
+            const bldgId = interaction.values[0];
+            const bldg = await db.get('SELECT type FROM buildings WHERE id=?', bldgId);
+            if (!bldg) return interaction.editReply({ content: '⚠️ Building not found.', components: [] });
+            const bd = BUILDINGS[bldg.type.toUpperCase()];
             const refund = Math.floor((bd?.cost || 0) * 0.5);
-            const embed = new EmbedBuilder().setTitle('🔴 CONFIRM DEMOLITION').setColor(0xFF0000).setDescription(`Are you sure you want to demolish **${bd?.name || bType}**?\n\nRefund: ${refund}⚖️`);
+            const embed = new EmbedBuilder().setTitle('🔴 CONFIRM DEMOLITION').setColor(0xFF0000).setDescription(`Are you sure you want to demolish **${bd?.name || bldg.type}**?\n\nRefund: **${refund} ⚖️**`);
             const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`demolishconfirm_${townId}_${bType}`).setLabel('Confirm Demolish').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId(`demolishconfirm_${townId}_id_${bldgId}`).setLabel('Confirm Demolish').setStyle(ButtonStyle.Danger),
                 new ButtonBuilder().setCustomId(`town_back_${townId}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
             );
             return interaction.editReply({ embeds: [embed], components: [row] });

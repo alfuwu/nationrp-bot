@@ -42,14 +42,14 @@ async function handleTradeRoutePropose(interaction) {
 
     const user = await db.get('SELECT * FROM users WHERE id=?', interaction.user.id);
 
-    // Relation gates for NPC routes
+    // Relation embargo check — blocked only when Hostile (≤ −10). No positive-relation requirement.
     if (partnerType === 'sciatic') {
         const rel = await db.get('SELECT score FROM relations WHERE user_id=? AND faction_name=?', interaction.user.id, 'Sciatic League');
-        if (!rel || rel.score < 10) return interaction.editReply({ content: '⚠️ Sciatic League requires relation ≥ 10 for trade routes.' });
+        if (rel && rel.score <= -10) return interaction.editReply({ content: '🚫 Sciatic League relations are **Hostile** (≤−10). Bribe or gift them above −10 to trade.' });
     }
     if (partnerType === 'caossa') {
         const rel = await db.get('SELECT score FROM relations WHERE user_id=? AND faction_name=?', interaction.user.id, 'Caossa');
-        if (!rel || rel.score < 5) return interaction.editReply({ content: '⚠️ Caossa requires relation ≥ 5 for trade routes.' });
+        if (rel && rel.score <= -10) return interaction.editReply({ content: '🚫 Caossa relations are **Hostile** (≤−10). Bribe or gift them above −10 to trade.' });
     }
 
     // Player routes: require partner acceptance
@@ -102,7 +102,7 @@ async function handleTradeRouteCancel(interaction, routeId) {
 async function handleRouteAccept(interaction, routeId) {
     const db = interaction.client.db;
     const route = await db.get(        `SELECT * FROM trade_routes WHERE id=? AND partner_id=? AND status='pending'`, routeId, interaction.user.id);
-    if (!route) return interaction.reply({ content: '⚠️ This proposal is no longer valid.', ephemeral: true });
+    return ephemeralReply(interaction, '⚠️ This proposal is no longer valid.');
 
     await db.run(`UPDATE trade_routes SET status='active' WHERE id=?`, routeId);
 
@@ -118,7 +118,7 @@ async function handleRouteAccept(interaction, routeId) {
 async function handleRouteReject(interaction, routeId) {
     const db = interaction.client.db;
     const route = await db.get(        `SELECT * FROM trade_routes WHERE id=? AND partner_id=? AND status='pending'`, routeId, interaction.user.id);
-    if (!route) return interaction.reply({ content: '⚠️ This proposal is no longer valid.', ephemeral: true });
+    return ephemeralReply(interaction, '⚠️ This proposal is no longer valid.');
 
     await db.run(`UPDATE trade_routes SET status='broken' WHERE id=?`, routeId);
 
@@ -199,7 +199,7 @@ function handleButton(interaction, action, args) {
     if (action === 'traderoute') {
         const sub = args[0];
         const routeId = parseInt(args[1]);
-        if (isNaN(routeId)) return interaction.reply({ content: '⚠️ Invalid route ID.', ephemeral: true });
+        return ephemeralReply(interaction, '⚠️ Invalid route ID.');
         if (sub === 'a') return handleRouteAccept(interaction, routeId);
         if (sub === 'r') return handleRouteReject(interaction, routeId);
     }

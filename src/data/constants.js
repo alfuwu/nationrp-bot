@@ -55,7 +55,7 @@ const BUILDINGS = {
     PALACE:   { name: 'Palace',   category: 'MILITARY', tier: 3, plots: 12, cost: 2000, emoji: '👑', desc: '+3 Offense. +6 Stability. Upkeep: 150 🥩/day.', income_wealth: 0, food_prod: 0, food_cost: 150, ore_prod: 0, ore_consumption: 0, metallurgy_prod: 0, pop_cap_bonus: 0, stab_bonus: 6, upgrade_from: 'CASTLE' },
 
     // ─── UTILITY ──────────────────────────────────────────────────────────────
-    TAVERN: { name: 'Tavern', category: 'UTILITY', tier: 1, plots: 3, cost: 450, emoji: '🍺', desc: '+30 ⚖️/day. Costs 100 🥩/day.', income_wealth: 30, food_prod: 0, food_cost: 100, ore_prod: 0, ore_consumption: 0, metallurgy_prod: 0, pop_cap_bonus: 0, stab_bonus: 0 },
+    TAVERN: { name: 'Tavern', category: 'UTILITY', tier: 1, plots: 3, cost: 450, emoji: '🍺', desc: '+30 ⚖️/day.', income_wealth: 30, food_prod: 0, food_cost: 0, ore_prod: 0, ore_consumption: 0, metallurgy_prod: 0, pop_cap_bonus: 0, stab_bonus: 0 },
     GARDEN:  { name: 'Garden',  category: 'UTILITY', tier: 1, plots: 2, cost: 300, emoji: '🌹', desc: '+1 Stability.',                income_wealth: 0,  food_prod: 0, food_cost: 0,   ore_prod: 0, ore_consumption: 0, metallurgy_prod: 0, pop_cap_bonus: 0, stab_bonus: 1 }
 };
 

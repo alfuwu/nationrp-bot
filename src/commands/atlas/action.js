@@ -1,6 +1,6 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
 const { STAT_MAPPING, EMOJIS, STAT_KEYS } = require('../../data/constants');
-const { getMod, fmtMod, isGM, isOwner } = require('../../utils/helpers');
+const { getMod, fmtMod, isGM, isOwner, ephemeralReply } = require('../../utils/helpers');
 const warfare = require('./warfare');
 
 // ─── Nation founding ──────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ async function handleSelect(interaction, action, args) {
             // customId: roll_stat_{uid} → args=['stat', uid]
             const uid = args[1] || interaction.user.id;
             if (uid !== interaction.user.id) {
-                return interaction.reply({ content: '⚠️ Only the player who opened this Oracle may use it.', ephemeral: true });
+                return ephemeralReply(interaction, '⚠️ Only the player who opened this Oracle may use it.');
             }
             const statKey  = interaction.values[0];
             const statData = STAT_MAPPING[statKey];
@@ -89,7 +89,7 @@ async function handleSelect(interaction, action, args) {
             const statKey  = args[1];
             const uid      = args[2];
             if (uid && interaction.user.id !== uid) {
-                return interaction.reply({ content: '⚠️ Only the player who opened this Oracle may use it.', ephemeral: true });
+                return ephemeralReply(interaction, '⚠️ Only the player who opened this Oracle may use it.');
             }
             const subSkill = interaction.values[0];
             const user     = await db.get('SELECT * FROM users WHERE id = ?', interaction.user.id);
@@ -123,7 +123,7 @@ async function handleSelect(interaction, action, args) {
             // customId: roll_raw_{uid} → args=['raw', uid]
             const uid = args[1];
             if (uid && interaction.user.id !== uid) {
-                return interaction.reply({ content: '⚠️ Only the player who opened this Oracle may use it.', ephemeral: true });
+                return ephemeralReply(interaction, '⚠️ Only the player who opened this Oracle may use it.');
             }
             const sides = parseInt(interaction.values[0]);
             const roll  = Math.floor(Math.random() * sides) + 1;
@@ -191,7 +191,7 @@ async function handleButton(interaction, action, args) {
     if (action === 'roll' && args[0] === 'back') {
         const uid = args[1] || interaction.user.id;
         if (uid !== interaction.user.id) {
-            return interaction.reply({ content: '⚠️ Only the player who opened this Oracle may use it.', ephemeral: true });
+            return ephemeralReply(interaction, '⚠️ Only the player who opened this Oracle may use it.');
         }
         await interaction.deferUpdate();
         return await renderRollGUI(interaction, uid);

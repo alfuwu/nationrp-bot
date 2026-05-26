@@ -3,15 +3,15 @@ const {
     StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle
 } = require('discord.js');
 const { FACTIONS } = require('../../data/constants');
-const { getNotificationChannel, isGM, sendToPlayer } = require('../../utils/helpers');
+const { getNotificationChannel, isGM, sendToPlayer, ephemeralReply } = require('../../utils/helpers');
 const { ANCESTRIES } = require('../../data/constants');
 
 const ONE_DAY = 24 * 60 * 60 * 1000;
 
 const FACTION_MECHANICS = {
     'Tyrannite':      { unlock: 15, unlockText: 'Vitale market access, Empire Ruler candidacy',          penalty: -20, penaltyText: 'Vitale embargo' },
-    'Caossa':         { unlock: 10, unlockText: '+10% ore/metallurgy production',                        penalty: -20, penaltyText: 'Caossa trade routes blocked' },
-    'Sciatic League': { unlock: 10, unlockText: 'Trade route access',                                    penalty: null, penaltyText: null },
+    'Caossa':         { unlock: null, unlockText: 'Open trade routes + ore/metallurgy bonus',          penalty: -10, penaltyText: 'Trade embargo (Hostile relations)' },
+    'Sciatic League': { unlock: null, unlockText: 'Open trade routes including Servus exchange',         penalty: -10, penaltyText: 'Trade embargo (Hostile relations)' },
     'The Mothers':    { unlock: 10, unlockText: 'Noble vitale upkeep halved for Sovereigns',             penalty: null, penaltyText: null },
     'The Fathers':    { unlock: 10, unlockText: 'Military recruitment cap +50%',                         penalty: null, penaltyText: null },
     'Atomic Guild':   { unlock: 15, unlockText: '+max(INT,WIS mod) to all rolls',                       penalty: -20, penaltyText: 'GM notification chance per tax tick' },
@@ -83,7 +83,7 @@ async function handleDiplomacy(interaction) {
 
 async function handleFactionDetail(interaction, userId, factionName) {
     const db = interaction.client.db;
-    if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this ledger may use it.', ephemeral: true });
+    if (interaction.user.id !== userId) return ephemeralReply(interaction, '⚠️ Only the player who opened this ledger may use it.');
 
     const rel = await db.get('SELECT * FROM relations WHERE user_id=? AND faction_name=?', userId, factionName);
     const score = rel?.score || 0;
@@ -133,18 +133,18 @@ async function handleFactionDetail(interaction, userId, factionName) {
 
 async function handleBribe(interaction, userId, factionName, type) {
     const db = interaction.client.db;
-    if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this ledger may use it.', ephemeral: true });
+    if (interaction.user.id !== userId) return ephemeralReply(interaction, '⚠️ Only the player who opened this ledger may use it.');
 
     const rel = await db.get('SELECT * FROM relations WHERE user_id=? AND faction_name=?', userId, factionName);
     if (rel && rel.last_bribe && (Date.now() - rel.last_bribe < ONE_DAY)) {
-        return interaction.reply({ content: '⚠️ Bribe on cooldown. Wait 24 hours between bribes per faction.', ephemeral: true });
+        return ephemeralReply(interaction, '⚠️ Bribe on cooldown. Wait 24 hours between bribes per faction.');
     }
 
     const user = await db.get('SELECT balance, exotics FROM users WHERE id=?', userId);
     const now = Date.now();
 
     if (type === 'gold') {
-        if ((user.balance || 0) < 500) return interaction.reply({ content: '⚠️ Insufficient balance. Need 500 :coin:.', ephemeral: true });
+        if ((user.balance || 0) < 500) return ephemeralReply(interaction, '⚠️ Insufficient balance. Need 500 :coin:.');
         await db.run('UPDATE users SET balance=balance-500 WHERE id=?', userId);
         await db.run(
             'INSERT INTO relations (user_id, faction_name, score, last_bribe) VALUES (?,?,COALESCE((SELECT score FROM relations WHERE user_id=? AND faction_name=?),0)+1,?) ON CONFLICT(user_id,faction_name) DO UPDATE SET score=score+1, last_bribe=?',
@@ -154,7 +154,7 @@ async function handleBribe(interaction, userId, factionName, type) {
     }
 
     if (type === 'exotic') {
-        if ((user.exotics || 0) < 1) return interaction.reply({ content: '⚠️ Insufficient exotics. Need 1 🍷.', ephemeral: true });
+        if ((user.exotics || 0) < 1) return ephemeralReply(interaction, '⚠️ Insufficient exotics. Need 1 🍷.');
         await db.run('UPDATE users SET exotics=exotics-1 WHERE id=?', userId);
         await db.run(
             'INSERT INTO relations (user_id, faction_name, score, last_bribe) VALUES (?,?,COALESCE((SELECT score FROM relations WHERE user_id=? AND faction_name=?),0)+3,?) ON CONFLICT(user_id,faction_name) DO UPDATE SET score=score+3, last_bribe=?',
@@ -232,7 +232,7 @@ async function handleProposeTreaty(interaction, userId) {
 }
 
 async function handleTreatyTypeSelect(interaction, userId) {
-    if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this may use it.', ephemeral: true });
+    if (interaction.user.id !== userId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
     const treatyType = interaction.values[0];
 
     await interaction.deferUpdate();
@@ -264,11 +264,11 @@ async function handleTreatyTypeSelect(interaction, userId) {
 }
 
 async function handleTreatyPlayerSelect(interaction, userId, treatyType) {
-    if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this may use it.', ephemeral: true });
+    if (interaction.user.id !== userId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
     const partnerId = interaction.values[0];
     const db = interaction.client.db;
 
-    if (partnerId === userId) return interaction.reply({ content: '⚠️ Cannot propose a treaty to yourself.', ephemeral: true });
+    if (partnerId === userId) return ephemeralReply(interaction, '⚠️ Cannot propose a treaty to yourself.');
 
     const result = await db.run(
         'INSERT INTO treaties (initiator_id, partner_id, treaty_type, status) VALUES (?,?,?,"pending")',
@@ -304,7 +304,7 @@ async function handleTreatyPlayerSelect(interaction, userId, treatyType) {
 async function handleTreatyAccept(interaction, treatyId) {
     const db = interaction.client.db;
     const treaty = await db.get('SELECT * FROM treaties WHERE id=? AND partner_id=? AND status="pending"', treatyId, interaction.user.id);
-    if (!treaty) return interaction.reply({ content: '⚠️ This proposal is no longer valid.', ephemeral: true });
+    return ephemeralReply(interaction, '⚠️ This proposal is no longer valid.');
 
     await db.run('UPDATE treaties SET status="active" WHERE id=?', treatyId);
     const emb = EmbedBuilder.from(interaction.message.embeds[0]).setColor(0x00FF88).setTitle('✅ TREATY ACCEPTED');
@@ -319,7 +319,7 @@ async function handleTreatyAccept(interaction, treatyId) {
 async function handleTreatyReject(interaction, treatyId) {
     const db = interaction.client.db;
     const treaty = await db.get('SELECT * FROM treaties WHERE id=? AND partner_id=? AND status="pending"', treatyId, interaction.user.id);
-    if (!treaty) return interaction.reply({ content: '⚠️ This proposal is no longer valid.', ephemeral: true });
+    return ephemeralReply(interaction, '⚠️ This proposal is no longer valid.');
 
     await db.run(`UPDATE treaties SET status='broken' WHERE id=?`, treatyId);
     const emb = EmbedBuilder.from(interaction.message.embeds[0]).setColor(0xFF0000).setTitle('❌ TREATY REJECTED');
@@ -354,7 +354,7 @@ async function handleTreatyDissolve(interaction) {
 }
 
 async function handleWarMenu(interaction, userId) {
-    if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this ledger may use it.', ephemeral: true });
+    return ephemeralReply(interaction, '⚠️ Only the player who opened this ledger may use it.');
     const emb = new EmbedBuilder()
         .setTitle('⚔️ DECLARE WAR')
         .setColor(0xFF0000)
@@ -376,7 +376,7 @@ async function handleWarMenu(interaction, userId) {
 }
 
 async function handleGiftMenu(interaction, userId) {
-    if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this may use it.', ephemeral: true });
+    return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
     const db = interaction.client.db;
     const players = await db.all("SELECT id, username, ruler_name, nation FROM users WHERE status='active' AND id!=?", userId);
     if (!players.length) return interaction.editReply({ content: '⚠️ No other active players to send gifts to.', components: [] });
@@ -398,7 +398,7 @@ async function handleGiftMenu(interaction, userId) {
 }
 
 async function handleGiftPlayerSelect(interaction, userId) {
-    if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this may use it.', ephemeral: true });
+    if (interaction.user.id !== userId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
     const partnerId = interaction.values[0];
 
     const resourceMenu = new StringSelectMenuBuilder()
@@ -427,10 +427,10 @@ async function handleModal(interaction, action, args) {
         const partnerId = args[2];
         const res = args[3];
         const amt = parseInt(interaction.fields.getTextInputValue('amt'));
-        if (!res || isNaN(amt) || amt <= 0) return interaction.reply({ content: '⚠️ Invalid input.', ephemeral: true });
+        return ephemeralReply(interaction, '⚠️ Invalid input.');
 
         const user = await db.get('SELECT * FROM users WHERE id=?', userId);
-        if ((user[res] || 0) < amt) return interaction.reply({ content: `⚠️ Insufficient ${res}.`, ephemeral: true });
+        return ephemeralReply(interaction, `⚠️ Insufficient ${res}.`);
 
         await db.run(`UPDATE users SET ${res}=${res}-? WHERE id=?`, amt, userId);
         await db.run(`UPDATE users SET ${res}=COALESCE(${res},0)+? WHERE id=?`, amt, partnerId);
@@ -438,7 +438,7 @@ async function handleModal(interaction, action, args) {
         await sendToPlayer(interaction.client, interaction, partnerId, {
             content: `🎁 <@${userId}> sent you **${amt} ${res}**!`
         });
-        return interaction.reply({ content: `🎁 Gifted **${amt} ${res}** to <@${partnerId}>.`, ephemeral: true });
+        return ephemeralReply(interaction, `🎁 Gifted **${amt} ${res}** to <@${partnerId}>.`);
     }
 }
 
@@ -474,14 +474,14 @@ async function handleButton(interaction, action, args) {
             const uid = args[2];
             const idx = parseInt(args[3]);
             const factionName = FACTIONS[idx];
-            if (!factionName) return interaction.reply({ content: '⚠️ Unknown faction.', ephemeral: true });
+            if (!factionName) return ephemeralReply(interaction, '⚠️ Unknown faction.');
             return await handleBribe(interaction, uid, factionName, bribeType);
         }
     }
     if (action === 'treaty') {
         const sub = args[0];
         const tid = parseInt(args[1]);
-        if (isNaN(tid)) return interaction.reply({ content: '⚠️ Invalid treaty ID.', ephemeral: true });
+        if (isNaN(tid)) return ephemeralReply(interaction, '⚠️ Invalid treaty ID.');
         if (sub === 'accept') return await handleTreatyAccept(interaction, tid);
         if (sub === 'reject') return await handleTreatyReject(interaction, tid);
     }
