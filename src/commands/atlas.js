@@ -1,13 +1,14 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
-const { BUILDINGS, TERRAINS } = require('../data/constants');
-const { decodeFreeDist } = require('../utils/helpers');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
 const character = require('./atlas/character');
 const town = require('./atlas/town');
 const leaderboard = require('./atlas/leaderboard');
 const economy = require('./atlas/economy');
+
+// action.js now only handles: roll GUI, nation found, rebellion/revolt buttons, GM roll
+// scout and recruit moved to military.js
 const actionMod = require('./atlas/action');
-const trade = require('./atlas/trade');
+
 const diplomacy = require('./atlas/diplomacy');
 const warfare = require('./atlas/warfare');
 const military = require('./atlas/military');
@@ -128,7 +129,7 @@ module.exports = {
         if (action === 'roll') {
             return await actionMod.handleButton(interaction, action, args);
         }
-        if (action === 'vitale' || action === 'ta' || action === 'td' || action.startsWith('tmodal') || action === 'empire') {
+        if (action === 'vitale' || action === 'ta' || action === 'td' || action.startsWith('tmodal') || action === 'empire' || action === 'trade') {
             return await economy.handleButton(interaction, action, args);
         }
         if (action === 'rebellion' || action === 'revolt') {
@@ -141,20 +142,18 @@ module.exports = {
             await interaction.deferUpdate();
             return await leaderboard.handleLeaderboard(interaction, args[0] || 'total');
         }
-        if (action === 'lb') {
-            await interaction.deferUpdate();
-            return await leaderboard.handleLeaderboard(interaction, args[0] || 'total');
-        }
         if (action === 'diplo') {
             return await diplomacy.handleButton(interaction, action, args);
         }
         if (action === 'treaty') {
             return await diplomacy.handleButton(interaction, action, args);
         }
-        if (action.startsWith('war') || action === 'warbattle' || action === 'warsiege' || action === 'wardefcommit' || action === 'warraid') {
-            return await warfare.handleButton(interaction, action, args);
-        }
-        if (action === 'raidwithdraw') {
+        // Explicit war-action allowlist — avoids matching future 'war*' prefixes like 'warehouse'
+        const WAR_ACTIONS = new Set([
+            'warapprove','warreject','warbattle','warsiege',
+            'wardefcommit','warconfirm','warabort','warraid','raidwithdraw'
+        ]);
+        if (WAR_ACTIONS.has(action)) {
             return await warfare.handleButton(interaction, action, args);
         }
         if (action === 'mil' && args[0] === 'back') {
@@ -163,6 +162,10 @@ module.exports = {
         }
         if (action === 'colo' || action.startsWith('colo_')) {
             return await colosseum.handleButton(interaction, action, args);
+        }
+        if (action === 'traderoute') {
+            const trade = require('./atlas/trade');
+            return await trade.handleButton(interaction, action, args);
         }
     },
 
@@ -193,9 +196,6 @@ module.exports = {
         }
         if (action === 'colo') {
             return await colosseum.handleModal(interaction, action, args);
-        }
-        if (action === 'tmodalg' || action === 'tmodalr') {
-            return await economy.handleModal(interaction, action, args);
         }
         if (action === 'warcomp') {
             return await warfare.handleBattleCompositionSubmit(interaction, args[0], args[1]);
@@ -238,7 +238,7 @@ module.exports = {
             return await colosseum.handleSelect(interaction, action, args);
         }
         if (action === 'wardefform') {
-            return await warfare.handleDefenderFormationPick(interaction, args[0], args[1], args[2], args[3]);
+            return await warfare.handleDefenderFormationPick(interaction, args[0], args[1], args[2], interaction.values[0]);
         }
     }
 };

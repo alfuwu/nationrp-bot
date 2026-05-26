@@ -1,7 +1,7 @@
 const { ANCESTRIES, UPBRINGINGS, PROFESSIONS, STAT_MAPPING, VITALE_FREE_HOUSES, GREAT_HOUSES, PLAYER_RANKS } = require('../data/constants');
 
 const OWNER_ID = process.env.OWNER_ID || '317883862258548737';
-const STAT_KEYS = ['str', 'mot', 'men', 'int', 'wis', 'cha'];
+// STAT_KEYS ({ str: 'attr_str', ... }) is exported from constants.js — import from there directly.
 const BASE_STAT = 10;
 
 // ─── Character math ───────────────────────────────────────────────────────────
@@ -178,8 +178,6 @@ function formatWarningBanner(rateStab, ratePrest) {
     return null; // No banner needed
 }
 
-// ─── Database migrations ──────────────────────────────────────────────────────
-
 // ─── Rank helpers ─────────────────────────────────────────────────────────────
 
 /**
@@ -226,6 +224,61 @@ async function sendToPlayer(client, interaction, userId, content) {
     } catch (_) {}
 }
 
+async function getActivePlayers(db, excludeId) {
+    return db.all("SELECT id, username, ruler_name, nation FROM users WHERE status='active' AND id!=?", excludeId);
+}
+
+/**
+ * ephemeralReply — sends an ephemeral message without anchoring it to the source message.
+ *
+ * Problem: When a button/select handler calls interaction.reply({ ephemeral: true }),
+ * Discord links that ephemeral to the original message. When the user dismisses it,
+ * Discord shows "the original message was deleted" — even though it wasn't.
+ *
+ * Fix: For component interactions (buttons, select menus), use interaction.followUp()
+ * instead of interaction.reply(). followUp posts the ephemeral as a free-floating
+ * message, so dismissing it never affects the source message.
+ *
+ * For slash commands and modals, reply() is correct and is used unchanged.
+ *
+ * @param {Interaction} interaction
+ * @param {string|object} options  — string or reply options object
+ */
+async function ephemeralReply(interaction, options) {
+    const payload = typeof options === 'string' ? { content: options, ephemeral: true } : options;
+
+    // ComponentTypes: Button=2, StringSelect=3, UserSelect=5, RoleSelect=6,
+    // MentionableSelect=7, ChannelSelect=8
+    const COMPONENT_TYPES = new Set([2, 3, 5, 6, 7, 8]);
+    const isComponent = COMPONENT_TYPES.has(interaction.componentType);
+
+    try {
+        if (isComponent) {
+            // Acknowledge the component click silently (keeps original message intact),
+            // then post the ephemeral as a standalone followUp.
+            if (!interaction.deferred && !interaction.replied) {
+                await interaction.deferUpdate();
+            }
+            return await interaction.followUp({ ...payload, ephemeral: true });
+        }
+        // Slash command / modal: reply() is correct here.
+        if (interaction.deferred || interaction.replied) {
+            return await interaction.editReply(payload);
+        }
+        return await interaction.reply({ ...payload, ephemeral: true });
+    } catch (e) { console.error('[ATLAS] ephemeralReply failed:', e.message); }
+}
+
+/**
+ * safeReply — gracefully reply or editReply to a deferred/replied interaction.
+ * Use inside catch blocks for warfare/economy handlers.
+ * Uses ephemeralReply so button-triggered errors also avoid the "deleted" bug.
+ */
+async function safeReply(interaction, options) {
+    return await ephemeralReply(interaction, options);
+}
+
+
 // ─── Army maintenance ─────────────────────────────────────────────────────────
 
 // Morale used by both warfare and colosseum systems
@@ -250,6 +303,9 @@ function calcMaintenance(user) {
 
 // ─── Database migrations ──────────────────────────────────────────────────────
 
+// helpers.js initDB(): Extended schema (gm_events, trade_routes, treaties, duels, bets, pending_trades)
+//   + idempotent ALTER TABLE migrations for all columns added after initial deploy.
+// Both must be called on startup: setupDatabase() then initDB(db).
 async function initDB(db) {
     // Safe migrations — each silently skipped if column already exists
     const migrations = [
@@ -332,6 +388,8 @@ async function initDB(db) {
         'CREATE TABLE IF NOT EXISTS duels (id INTEGER PRIMARY KEY AUTOINCREMENT, challenger_id TEXT, defender_id TEXT, terrain TEXT, name TEXT, status TEXT DEFAULT "pending", challenger_hp INTEGER DEFAULT 10, defender_hp INTEGER DEFAULT 10, round INTEGER DEFAULT 0, challenger_stance TEXT, defender_stance TEXT, winner_id TEXT, created_at INTEGER)',
         'ALTER TABLE duels ADD COLUMN name TEXT',
         'CREATE TABLE IF NOT EXISTS bets (id INTEGER PRIMARY KEY AUTOINCREMENT, duel_id INTEGER, bettor_id TEXT, amount INTEGER, bet_on TEXT, odds REAL, payout INTEGER DEFAULT 0, created_at INTEGER)',
+        // pending_trades for one-time player trade consent flow
+        'CREATE TABLE IF NOT EXISTS pending_trades (id INTEGER PRIMARY KEY AUTOINCREMENT, initiator_id TEXT, partner_id TEXT, give_resource TEXT, give_amount INTEGER, recv_resource TEXT, recv_amount INTEGER, status TEXT DEFAULT "pending", created_at INTEGER)',
     ];
     for (const sql of newTables) {
         try { await db.run(sql); } catch (_) {}
@@ -392,19 +450,8 @@ async function initDB(db) {
         }
     } catch (e) { console.error('[DB] FIX 4 failed:', e.message); }
 
-    // FIX 6: Migrate legacy mil_infantry → mil_swordsman
-    try {
-        const result = await db.run(`
-            UPDATE users SET mil_swordsman = COALESCE(mil_swordsman,0) + COALESCE(mil_infantry,0),
-            mil_infantry = 0
-            WHERE mil_infantry > 0
-        `);
-        if (result.changes > 0) {
-            console.log(`[DB] FIX 6: Migrated ${result.changes} players\' mil_infantry → mil_swordsman.`);
-        }
-    } catch (e) { console.error('[DB] FIX 6 failed:', e.message); }
-    // Sets mil_maintenance_cost = pop_soldiers * 1 (1 food per soldier per day)
-    // for any row where soldiers > 0 but maintenance_cost is still 0.
+    // FIX 5 (legacy — safe to remove once all instances have run once):
+    // Sets mil_maintenance_cost from pop_soldiers for rows that predate the maintenance column.
     try {
         await db.run(`
             UPDATE users
@@ -414,19 +461,33 @@ async function initDB(db) {
         console.log('[DB] FIX 5: mil_maintenance_cost initialized for existing armies.');
     } catch (e) { console.error('[DB] FIX 5 failed:', e.message); }
 
+    // FIX 6: Migrate legacy mil_infantry → mil_swordsman (runs after FIX 5)
+    try {
+        const result = await db.run(`
+            UPDATE users SET mil_swordsman = COALESCE(mil_swordsman,0) + COALESCE(mil_infantry,0),
+            mil_infantry = 0
+            WHERE mil_infantry > 0
+        `);
+        if (result.changes > 0) {
+            console.log(`[DB] FIX 6: Migrated ${result.changes} players' mil_infantry → mil_swordsman.`);
+        }
+    } catch (e) { console.error('[DB] FIX 6 failed:', e.message); }
+
     console.log('[DB] All migrations and fixes complete.');
 }
 
 module.exports = {
-    OWNER_ID, STAT_KEYS, BASE_STAT,
+    OWNER_ID, BASE_STAT,
     getMod, fmtMod, isOwner, isGM, resolveAtlasHQ,
     applyBoost, applyBoosts, buildBaseAttributes, decodeFreeDist,
     calcStabMultiplier, getCharBonuses, calcNobleState,
     getWarningLevel, formatWarningBanner,
     getPlayerRank, isVitaleFree, getNotificationChannel,
-    sendToPlayer,
+    sendToPlayer, getActivePlayers,
+    safeReply, ephemeralReply,
     calcMorale,
     calcMaintenance,
-    initDB, STAT_MAPPING,
+    initDB,
     GREAT_HOUSES, PLAYER_RANKS, VITALE_FREE_HOUSES
+    // Note: STAT_MAPPING and STAT_KEYS are importable directly from '../data/constants'
 };

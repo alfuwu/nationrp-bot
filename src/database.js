@@ -2,6 +2,11 @@ const sqlite3 = require('sqlite3');
 const { open } = require('sqlite');
 const path = require('path');
 
+// database.js: Core schema (users, towns, buildings, relations, global_settings, gm_whitelist)
+// helpers.js initDB(): Extended schema (gm_events, trade_routes, treaties, duels, bets, pending_trades)
+//   + idempotent ALTER TABLE migrations for all columns added after initial deploy.
+// Both must be called on startup: setupDatabase() then initDB(db).
+
 async function setupDatabase() {
     const db = await open({
         filename: path.join(__dirname, '../database.sqlite'),

@@ -55,7 +55,7 @@ const BUILDINGS = {
     PALACE:   { name: 'Palace',   category: 'MILITARY', tier: 3, plots: 12, cost: 2000, emoji: '👑', desc: '+3 Offense. +6 Stability. Upkeep: 150 🥩/day.', income_wealth: 0, food_prod: 0, food_cost: 150, ore_prod: 0, ore_consumption: 0, metallurgy_prod: 0, pop_cap_bonus: 0, stab_bonus: 6, upgrade_from: 'CASTLE' },
 
     // ─── UTILITY ──────────────────────────────────────────────────────────────
-    TAVERN: { name: 'Tavern', category: 'UTILITY', tier: 1, plots: 3, cost: 450, emoji: '🍺', desc: '+30 ⚖️/day. Costs 100 🥩/day.', income_wealth: 30, food_prod: 0, food_cost: 100, ore_prod: 0, ore_consumption: 0, metallurgy_prod: 0, pop_cap_bonus: 0, stab_bonus: 0 },
+    TAVERN: { name: 'Tavern', category: 'UTILITY', tier: 1, plots: 3, cost: 450, emoji: '🍺', desc: '+30 ⚖️/day.', income_wealth: 30, food_prod: 0, food_cost: 0, ore_prod: 0, ore_consumption: 0, metallurgy_prod: 0, pop_cap_bonus: 0, stab_bonus: 0 },
     GARDEN:  { name: 'Garden',  category: 'UTILITY', tier: 1, plots: 2, cost: 300, emoji: '🌹', desc: '+1 Stability.',                income_wealth: 0,  food_prod: 0, food_cost: 0,   ore_prod: 0, ore_consumption: 0, metallurgy_prod: 0, pop_cap_bonus: 0, stab_bonus: 1 }
 };
 
@@ -174,9 +174,9 @@ const FORMATIONS = {
 const MERC_DESC = 'Soldiers-for-hire drawn from various lands and backgrounds, bound by coin rather than loyalty. They fight effectively but disband at the end of each Imperial turn.';
 
 const DUEL_STANCES = {
-    HEAVY:   { name: 'Heavy Attack', emoji: '⚔️', beats: 'DEFEND', losesTo: 'QUICK', winMult: 2.0, lossMult: 0.5, tieMult: 1.0, desc: 'Powerful swing. Destroys Defend.' },
-    DEFEND:  { name: 'Defend',       emoji: '🛡️', beats: 'QUICK', losesTo: 'HEAVY', winMult: 1.0, lossMult: 0.7, tieMult: 1.0, desc: 'Steady guard. Counters Quick Strike.' },
-    QUICK:   { name: 'Quick Strike', emoji: '⚡', beats: 'HEAVY', losesTo: 'DEFEND', winMult: 1.5, lossMult: 0.5, tieMult: 1.0, desc: 'Fast lunge. Outspeeds Heavy Attack.' },
+    HEAVY:   { name: 'Heavy Attack', emoji: '⚔️', beats: 'RIPOSTE', losesTo: 'QUICK', winMult: 2.0, lossMult: 0.5, tieMult: 1.0, desc: 'Powerful swing. Destroys Riposte.' },
+    RIPOSTE: { name: 'Riposte',      emoji: '🛡️', beats: 'QUICK', losesTo: 'HEAVY', winMult: 1.0, lossMult: 0.7, tieMult: 1.0, desc: 'Calculated counter. Beats Quick Strike.' },
+    QUICK:   { name: 'Quick Strike', emoji: '⚡', beats: 'HEAVY', losesTo: 'RIPOSTE', winMult: 1.5, lossMult: 0.5, tieMult: 1.0, desc: 'Fast lunge. Outspeeds Heavy Attack.' },
 };
 
 const DUEL_TERRAIN_MODS = {

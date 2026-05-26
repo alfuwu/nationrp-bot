@@ -6,8 +6,12 @@ const { RESOURCES, TERRAIN_MULTIPLIERS, BUILDINGS, ANCESTRIES } = require('../..
 const {
     calcStabMultiplier, getCharBonuses, calcNobleState, formatWarningBanner,
     getPlayerRank, isVitaleFree, getNotificationChannel, calcMaintenance,
-    resolveAtlasHQ, GREAT_HOUSES, sendToPlayer
+    resolveAtlasHQ, GREAT_HOUSES, sendToPlayer, getActivePlayers, safeReply, ephemeralReply
 } = require('../../utils/helpers');
+
+// Resource name encoding for customIds (food_surplus has an underscore that breaks parsing)
+const encRes = r => r.replace('_surplus', 'SRP');
+const decRes = r => r.replace('SRP', '_surplus');
 
 async function handleTax(interaction) {
     const db = interaction.client.db;
@@ -322,7 +326,7 @@ async function handleTrade(interaction) {
             routeList,
         ].join('\n'));
 
-    const players = await db.all("SELECT id, username, ruler_name, nation FROM users WHERE status='active' AND id!=?", userId);
+    const players = await getActivePlayers(db, userId);
     const oneTimeMenu = new StringSelectMenuBuilder()
         .setCustomId(`trade_onedone_${userId}`)
         .setPlaceholder('1️⃣ One-Time Trade — select a player...')
@@ -366,18 +370,7 @@ async function handleEmpire(interaction) {
         emb.setFooter({ text: 'Embargoed — seek Vitale through player trade.' });
     }
 
-    const factionMenu = new StringSelectMenuBuilder()
-        .setCustomId(`empire_factiontrade_${userId}`)
-        .setPlaceholder('Trade with a faction...')
-        .addOptions(
-            { label: 'Styx Empire (Vitale)', value: 'styx', description: 'Trade wealth for Vitale' },
-            { label: 'Sciatic League', value: 'sciatic', description: 'Exotic goods and trade routes' },
-            { label: 'Caossa', value: 'caossa', description: 'Ores and worked metal' }
-        );
-
-    return interaction.editReply({ embeds: [emb], components: [
-        new ActionRowBuilder().addComponents(factionMenu)
-    ]});
+    return interaction.editReply({ embeds: [emb], components: [] });
 }
 
 async function renderEmpireEmbed(db) {
@@ -392,7 +385,7 @@ async function renderEmpireEmbed(db) {
 
     // Styx Empire stats
     const STYX_HOUSES = ['TYRANNITE', 'RHAGAIA', 'SELLESELA', 'GAIUS', 'CAOSSA'];
-    const styxPlayers = await db.all("SELECT id, mil_militia, mil_spearmen, mil_swordsman, mil_shield, mil_cavalry, mil_ranged, mil_siege, nation FROM users WHERE status='active'");
+    const styxPlayers = await db.all("SELECT id, mil_militia, mil_spearmen, mil_swordsman, mil_shield, mil_cavalry, mil_ranged, mil_siege, nation, ruler_name, username FROM users WHERE status='active'");
     const { ANCESTRIES } = require('../../data/constants');
     let vassalCount = 0, totalStyxMil = 0;
     const vassalNames = [];
@@ -402,7 +395,8 @@ async function renderEmpireEmbed(db) {
         if (house && STYX_HOUSES.includes(house)) {
             vassalCount++;
             totalStyxMil += (p.mil_militia||0)+(p.mil_spearmen||0)+(p.mil_swordsman||0)+(p.mil_shield||0)+(p.mil_cavalry||0)+(p.mil_ranged||0)+(p.mil_siege||0);
-            if (p.nation) vassalNames.push(p.nation);
+            const name = p.ruler_name || p.username || 'Unknown';
+            vassalNames.push(p.nation ? `${name} of ${p.nation}` : name);
         }
     }
     const vassalStr = vassalCount > 0 ? `${vassalCount} vassal(s) | ⚔️ ${totalStyxMil} total military` : 'No vassals sworn';
@@ -424,10 +418,10 @@ async function renderEmpireEmbed(db) {
 async function handleButton(interaction, action, args) {
     const db = interaction.client.db;
 
-    // Trade: "Set What You Give" button
+    // Trade: "Set What You Give" button → opens give-modal
     if (action === 'tmodalg') {
         const targetId = args[0];
-        const modal = new ModalBuilder().setCustomId(`tmodalgm_${targetId}`).setTitle('🎁 Set What You Give');
+        const modal = new ModalBuilder().setCustomId(`tmodalg_${targetId}`).setTitle('🎁 Set What You Give');
         modal.addComponents(
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('res').setLabel('Resource (wealth, food_surplus, etc)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('wealth')),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amt').setLabel('Amount').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('100'))
@@ -435,10 +429,10 @@ async function handleButton(interaction, action, args) {
         return await interaction.showModal(modal);
     }
 
-    // Trade: "Set What You Request" button
+    // Trade: "Set What You Request" button → opens request-modal
     if (action === 'tmodalr') {
         const targetId = args[0];
-        const modal = new ModalBuilder().setCustomId(`tmodalrm_${targetId}`).setTitle('🤝 Set What You Request');
+        const modal = new ModalBuilder().setCustomId(`tmodalr_${targetId}`).setTitle('🤝 Set What You Request');
         modal.addComponents(
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('res').setLabel('Resource (wealth, food_surplus, etc)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('food_surplus')),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amt').setLabel('Amount').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('50'))
@@ -449,7 +443,7 @@ async function handleButton(interaction, action, args) {
     if (action === 'vitale' && args[0] === 'buy') {
         const rel = await db.get('SELECT score FROM relations WHERE user_id=? AND faction_name=?', interaction.user.id, 'Tyrannite');
         if (rel && rel.score <= -20)
-            return interaction.reply({ content: '🚫 Embargoed by Styx Empire.', ephemeral: true });
+            return ephemeralReply(interaction, '🚫 Embargoed by Styx Empire.');
 
         const settings = await db.all('SELECT * FROM global_settings');
         const getS = k => settings.find(s => s.key === k)?.value;
@@ -466,105 +460,203 @@ async function handleButton(interaction, action, args) {
         return await interaction.showModal(modal);
     }
 
-    // Empire GUI: Faction trade select (handled in handleSelect)
     // Empire GUI: Back button
     if (action === 'empire' && args[0] === 'back') {
         await interaction.deferUpdate();
         return await handleEmpire(interaction);
+    }
+
+    // One-time trade: accept pending trade
+    if (action === 'ta' && args[0] === 'accept') {
+        const tradeId = parseInt(args[1]);
+        const trade = await db.get("SELECT * FROM pending_trades WHERE id=? AND partner_id=? AND status='pending'", tradeId, interaction.user.id);
+        return ephemeralReply(interaction, '⚠️ Trade no longer valid.');
+        const initiator = await db.get('SELECT * FROM users WHERE id=?', trade.initiator_id);
+        const partner   = await db.get('SELECT * FROM users WHERE id=?', trade.partner_id);
+        return ephemeralReply(interaction, '⚠️ Player not found.');
+        if ((initiator[trade.give_resource] || 0) < trade.give_amount)
+            return ephemeralReply(interaction, `⚠️ Initiator no longer has enough ${trade.give_resource}. Trade cancelled.`);
+        if ((partner[trade.recv_resource] || 0) < trade.recv_amount)
+            return ephemeralReply(interaction, `⚠️ You no longer have enough ${trade.recv_resource}. Trade cancelled.`);
+
+        await db.run(`UPDATE users SET ${trade.give_resource}=${trade.give_resource}-?, ${trade.recv_resource}=COALESCE(${trade.recv_resource},0)+? WHERE id=?`, trade.give_amount, trade.recv_amount, trade.initiator_id);
+        await db.run(`UPDATE users SET ${trade.recv_resource}=${trade.recv_resource}-?, ${trade.give_resource}=COALESCE(${trade.give_resource},0)+? WHERE id=?`, trade.recv_amount, trade.give_amount, trade.partner_id);
+        await db.run("UPDATE pending_trades SET status='completed' WHERE id=?", tradeId);
+
+        await interaction.update({ content: `✅ Trade accepted! You gave **${trade.recv_amount} ${trade.recv_resource}** and received **${trade.give_amount} ${trade.give_resource}**.`, embeds: [], components: [] });
+        await sendToPlayer(interaction.client, interaction, trade.initiator_id, {
+            content: `✅ <@${trade.partner_id}> accepted your trade! You gave **${trade.give_amount} ${trade.give_resource}**, received **${trade.recv_amount} ${trade.recv_resource}**.`
+        });
+        return;
+    }
+
+    // One-time trade: decline pending trade
+    if (action === 'ta' && args[0] === 'decline') {
+        const tradeId = parseInt(args[1]);
+        const trade = await db.get("SELECT * FROM pending_trades WHERE id=? AND partner_id=? AND status='pending'", tradeId, interaction.user.id);
+        return ephemeralReply(interaction, '⚠️ Trade no longer valid.');
+        await db.run("UPDATE pending_trades SET status='declined' WHERE id=?", tradeId);
+        await interaction.update({ content: '❌ Trade declined.', embeds: [], components: [] });
+        await sendToPlayer(interaction.client, interaction, trade.initiator_id, {
+            content: `❌ <@${trade.partner_id}> declined your trade offer.`
+        });
+        return;
+    }
+    // Faction trade: "Enter Amount" button → opens the give-amount modal
+    // (action='trade', args=['facconfirm', userId, faction, encRes(giveRes), encRes(recvRes)])
+    if (action === 'trade' && args[0] === 'facconfirm') {
+        const userId  = args[1];
+        const faction = args[2];
+        const giveRes = decRes(args[3]);
+        const recvRes = decRes(args[4]);
+        if (interaction.user.id !== userId)
+            return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
+        const modal = new ModalBuilder()
+            .setCustomId(`trade_facmod_${userId}_${faction}_${encRes(giveRes)}_${encRes(recvRes)}`)
+            .setTitle(`Give ${giveRes.replace('_surplus', ' (Food)')} for ${recvRes.replace('_surplus', ' (Food)')}`);
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                    .setCustomId('give_amt')
+                    .setLabel(`Amount of ${giveRes.replace('_surplus', ' (Food)')} to give`)
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true)
+                    .setPlaceholder('100')
+            )
+        );
+        return await interaction.showModal(modal);
     }
 }
 
 async function handleModal(interaction, action, args) {
     const db = interaction.client.db;
 
-    // Trade: One-time trade immediate execution
+    // Trade: One-time trade — submit give/recv amounts → create pending proposal
     if (action === 'trade' && args[0] === 'onedonemod') {
         const userId = args[1];
         const partnerId = args[2];
-        const giveRes = interaction.fields.getTextInputValue('give_res')?.trim().toLowerCase();
+        const giveRes = decRes(args[3]);  // decode encoded resource name
+        const recvRes = decRes(args[4]);
         const giveAmt = parseInt(interaction.fields.getTextInputValue('give_amt'));
-        const recvRes = interaction.fields.getTextInputValue('recv_res')?.trim().toLowerCase();
         const recvAmt = parseInt(interaction.fields.getTextInputValue('recv_amt'));
-        if (!giveRes || !recvRes || isNaN(giveAmt) || giveAmt <= 0 || isNaN(recvAmt) || recvAmt <= 0)
-            return interaction.reply({ content: '⚠️ Invalid input.', ephemeral: true });
-        if (giveRes === recvRes) return interaction.reply({ content: '⚠️ Cannot trade same resource.', ephemeral: true });
+        if (isNaN(giveAmt) || giveAmt <= 0 || isNaN(recvAmt) || recvAmt <= 0)
+            return ephemeralReply(interaction, '⚠️ Invalid amounts.');
 
-        const user = await db.get('SELECT * FROM users WHERE id=?', userId);
-        const partner = await db.get('SELECT * FROM users WHERE id=? AND status=?', partnerId, 'active');
-        if (!partner) return interaction.reply({ content: '⚠️ Partner not found.', ephemeral: true });
-        if ((user[giveRes] || 0) < giveAmt) return interaction.reply({ content: `⚠️ Insufficient ${giveRes}.`, ephemeral: true });
-        if ((partner[recvRes] || 0) < recvAmt) return interaction.reply({ content: `⚠️ Partner doesn't have enough ${recvRes}. Trade cancelled.`, ephemeral: true });
+        const user    = await db.get('SELECT * FROM users WHERE id=?', userId);
+        const partner = await db.get("SELECT * FROM users WHERE id=? AND status='active'", partnerId);
+        return ephemeralReply(interaction, '⚠️ Partner not found or inactive.');
+        return ephemeralReply(interaction, `⚠️ Insufficient ${giveRes} (you have ${user[giveRes]||0}).`);
 
-        // Execute immediate one-time trade
-        await db.run(`UPDATE users SET ${giveRes}=${giveRes}-?, ${recvRes}=COALESCE(${recvRes},0)+? WHERE id=?`, giveAmt, recvAmt, userId);
-        await db.run(`UPDATE users SET ${recvRes}=${recvRes}-?, ${giveRes}=COALESCE(${giveRes},0)+? WHERE id=?`, recvAmt, giveAmt, partnerId);
+        const result = await db.run(
+            'INSERT INTO pending_trades (initiator_id, partner_id, give_resource, give_amount, recv_resource, recv_amount, status, created_at) VALUES (?,?,?,?,?,?,?,?)',
+            userId, partnerId, giveRes, giveAmt, recvRes, recvAmt, 'pending', Date.now()
+        );
+        const tradeId = result.lastID;
 
-        await sendToPlayer(interaction.client, interaction, partnerId, {
-            content: `🤝 <@${userId}> traded: You received **${giveAmt} ${giveRes}**, gave **${recvAmt} ${recvRes}**.`
-        });
-        return interaction.reply({ content: `✅ Trade complete: Gave **${giveAmt} ${giveRes}** → Received **${recvAmt} ${recvRes}** from <@${partnerId}>.`, ephemeral: true });
+        const propEmb = new EmbedBuilder().setTitle('🤝 TRADE PROPOSAL').setColor(0x00BFFF)
+            .setDescription([
+                `<@${userId}> proposes a trade:`,
+                '',
+                `They give you: **${giveAmt} ${giveRes.replace('_surplus','')}**`,
+                `You give them: **${recvAmt} ${recvRes.replace('_surplus','')}**`,
+            ].join('\n'));
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`ta_accept_${tradeId}`).setLabel('✅ Accept').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`ta_decline_${tradeId}`).setLabel('❌ Decline').setStyle(ButtonStyle.Danger)
+        );
+        await sendToPlayer(interaction.client, interaction, partnerId, { content: `<@${partnerId}>`, embeds: [propEmb], components: [row] });
+        return ephemeralReply(interaction, `📨 Trade proposal sent to <@${partnerId}>. Awaiting their response.`);
     }
-    if (action === 'empire' && args[0] === 'factionmodal') {
+
+    // Trade: player route amounts modal submit
+    if (action === 'trade' && args[0] === 'newplayer' && args[1] === 'mod') {
+        const initiatorId = args[2];
+        const partnerId   = args[3];
+        const giveRes     = decRes(args[4]);  // decode
+        const recvRes     = decRes(args[5]);
+        const giveAmt  = parseInt(interaction.fields.getTextInputValue('give_amt'));
+        const recvAmt  = parseInt(interaction.fields.getTextInputValue('recv_amt'));
+        const duration = Math.min(10, Math.max(1, parseInt(interaction.fields.getTextInputValue('duration')) || 1));
+        if (isNaN(giveAmt) || giveAmt <= 0 || isNaN(recvAmt) || recvAmt <= 0)
+            return ephemeralReply(interaction, '⚠️ Invalid amounts.');
+
+        const user = await db.get('SELECT * FROM users WHERE id=?', initiatorId);
+        const target = await db.get("SELECT id FROM users WHERE id=? AND status='active'", partnerId);
+        return ephemeralReply(interaction, '⚠️ Partner not found.');
+        return ephemeralReply(interaction, '⚠️ Cannot trade with yourself.');
+
+        const result = await db.run(
+            'INSERT INTO trade_routes (initiator_id, partner_id, partner_type, give_resource, give_amount, receive_resource, receive_amount, duration_turns, turns_remaining, status) VALUES (?,?,?,?,?,?,?,?,?,?)',
+            initiatorId, partnerId, 'player', giveRes, giveAmt, recvRes, recvAmt, duration, duration, 'pending'
+        );
+        const routeId = result.lastID;
+
+        const { getNotificationChannel } = require('../../utils/helpers');
+        const chan = await getNotificationChannel(interaction.client, { id: partnerId, notification_channel: null, last_tax_channel: null });
+        if (chan) {
+            const { EmbedBuilder: Emb, ActionRowBuilder: AR, ButtonBuilder: BB, ButtonStyle: BS } = require('discord.js');
+            const propEmb = new EmbedBuilder().setTitle('🤝 TRADE ROUTE PROPOSAL').setColor(0x00BFFF)
+                .setDescription([`<@${initiatorId}> proposes a route:`, '', `Give: **${giveAmt} ${giveRes.replace('_surplus','')}** → Receive: **${recvAmt} ${recvRes.replace('_surplus','')}**`, `Duration: ${duration} turns`].join('\n'));
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`traderoute_a_${routeId}`).setLabel('✅ Accept').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId(`traderoute_r_${routeId}`).setLabel('❌ Reject').setStyle(ButtonStyle.Danger)
+            );
+            try { await chan.send({ content: `<@${partnerId}>`, embeds: [propEmb], components: [row] }); } catch (_) {}
+        }
+        return ephemeralReply(interaction, `📨 Route proposal sent to <@${partnerId}>. Awaiting their acceptance.`);
+    }
+
+    if (action === 'trade' && args[0] === 'facmod') {
         const userId = args[1];
         const faction = args[2];
-        const giveRes = interaction.fields.getTextInputValue('give_res')?.trim().toLowerCase();
+        const giveRes = decRes(args[3]);  // decode encoded resource
+        const recvRes = decRes(args[4]);
         const giveAmt = parseInt(interaction.fields.getTextInputValue('give_amt'));
-        const recvRes = interaction.fields.getTextInputValue('recv_res')?.trim().toLowerCase();
-        if (!giveRes || !recvRes || isNaN(giveAmt) || giveAmt <= 0)
-            return interaction.reply({ content: '⚠️ Invalid input.', ephemeral: true });
+        if (isNaN(giveAmt) || giveAmt <= 0)
+            return ephemeralReply(interaction, '⚠️ Invalid input.');
 
         const user = await db.get('SELECT * FROM users WHERE id=?', userId);
-        if ((user[giveRes] || 0) < giveAmt) return interaction.reply({ content: `⚠️ Insufficient ${giveRes}.`, ephemeral: true });
+        return ephemeralReply(interaction, `⚠️ Insufficient ${giveRes.replace('_surplus','')}.`);
 
-        // Relation gates
-        if (faction === 'sciatic') {
-            const rel = await db.get('SELECT score FROM relations WHERE user_id=? AND faction_name=?', userId, 'Sciatic League');
-            if (!rel || rel.score < 10) return interaction.reply({ content: '⚠️ Sciatic League requires relation ≥ 10.', ephemeral: true });
-        }
-        if (faction === 'caossa') {
-            const rel = await db.get('SELECT score FROM relations WHERE user_id=? AND faction_name=?', userId, 'Caossa');
-            if (!rel || rel.score < 5) return interaction.reply({ content: '⚠️ Caossa requires relation ≥ 5.', ephemeral: true });
+        // Embargo check — faction trade is blocked only when relations are Hostile (≤ −10).
+        // Players in Strained (−10 < score < 0) or better may still trade freely.
+        const FACTION_DB_NAMES = { styx: 'Tyrannite', sciatic: 'Sciatic League', caossa: 'Caossa' };
+        const factionDbName = FACTION_DB_NAMES[faction];
+        if (factionDbName) {
+            const rel = await db.get('SELECT score FROM relations WHERE user_id=? AND faction_name=?', userId, factionDbName);
+            if (rel && rel.score <= -10)
+                return ephemeralReply(interaction, `🚫 **Embargoed** — Your relations with **${factionDbName}** are Hostile (${rel.score}). Bribe or gift them above −10 to resume trading.`);
         }
 
         await db.run(
             "INSERT INTO trade_routes (initiator_id, partner_id, partner_type, give_resource, give_amount, receive_resource, receive_amount, duration_turns, turns_remaining, status) VALUES (?,NULL,?,?,?,?,?,?,?,'active')",
             userId, faction, giveRes, giveAmt, recvRes, 0, 1, 1
         );
-        return interaction.reply({ content: `✅ Trade route established with **${faction}**! Give ${giveAmt} ${giveRes} → receive ${recvRes} from them. Use \`/atlas trade\` to manage routes.`, ephemeral: true });
+        return ephemeralReply(interaction, `✅ Trade route established with **${faction.charAt(0).toUpperCase() + faction.slice(1)}**! Give ${giveAmt} ${giveRes.replace('_surplus','')} → receive ${recvRes.replace('_surplus','')} from them. Use \`/atlas trade\` to manage routes.`);
     }
 
-    // Trade: Give modal submit
-    if (action === 'tmodalgm') {
-        const targetId = args[0];
+    // Trade: Give modal submit (action = 'tmodalg', args[0] = targetId)
+    if (action === 'tmodalg') {
         const res = interaction.fields.getTextInputValue('res')?.trim().toLowerCase();
         const amt = parseInt(interaction.fields.getTextInputValue('amt'));
-        if (!res || isNaN(amt) || amt <= 0) return interaction.reply({ content: '⚠️ Invalid input.', ephemeral: true });
+        return ephemeralReply(interaction, '⚠️ Invalid input.');
         const user = await db.get('SELECT * FROM users WHERE id=?', interaction.user.id);
-        if ((user[res] || 0) < amt) return interaction.reply({ content: `⚠️ Insufficient ${res}.`, ephemeral: true });
-
-        return interaction.reply({
-            content: `✅ You will give **${amt} ${res}**.\nClick **Set What You Request** to continue.`,
-            ephemeral: true
-        });
+        return ephemeralReply(interaction, `⚠️ Insufficient ${res}.`);
+        return ephemeralReply(interaction, `✅ You will give **${amt} ${res}**.\nClick **Set What You Request** to continue.`);
     }
 
-    // Trade: Request modal submit
-    if (action === 'tmodalrm') {
-        const targetId = args[0];
+    // Trade: Request modal submit (action = 'tmodalr', args[0] = targetId)
+    if (action === 'tmodalr') {
         const res = interaction.fields.getTextInputValue('res')?.trim().toLowerCase();
         const amt = parseInt(interaction.fields.getTextInputValue('amt'));
-        if (!res || isNaN(amt) || amt <= 0) return interaction.reply({ content: '⚠️ Invalid input.', ephemeral: true });
-
-        return interaction.reply({
-            content: `✅ You will request **${amt} ${res}**.\nBoth sides set — use the trade embed to confirm or start over.`,
-            ephemeral: true
-        });
+        return ephemeralReply(interaction, '⚠️ Invalid input.');
+        return ephemeralReply(interaction, `✅ You will request **${amt} ${res}**.\nBoth sides set — use the trade embed to confirm or start over.`);
     }
 
     if (action === 'vitale' && args[0] === 'modal') {
         const vitalePrice = parseInt(args[1]);
         const amount      = parseInt(interaction.fields.getTextInputValue('amount')?.trim());
-        if (isNaN(amount) || amount <= 0) return interaction.reply({ content: '⚠️ Invalid amount.', ephemeral: true });
+        return ephemeralReply(interaction, '⚠️ Invalid amount.');
         await interaction.deferUpdate();
 
         const user = await db.get('SELECT wealth, nation FROM users WHERE id = ?', interaction.user.id);
@@ -586,7 +678,7 @@ async function handleSelect(interaction, action, args) {
     if (action === 'empire' && args[0] === 'factiontrade') {
         const userId = args[1];
         const faction = interaction.values[0];
-        if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this may use it.', ephemeral: true });
+        if (interaction.user.id !== userId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
 
         const modal = new ModalBuilder()
             .setCustomId(`empire_factionmodal_${userId}_${faction}`)
@@ -599,21 +691,66 @@ async function handleSelect(interaction, action, args) {
         return await interaction.showModal(modal);
     }
 
-    // Trade GUI: one-time trade — select a player
+    // Trade GUI: one-time trade — select a player → show give-resource dropdown
     if (action === 'trade' && args[0] === 'onedone') {
         const userId = args[1];
         const partnerId = interaction.values[0];
-        if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this may use it.', ephemeral: true });
-        if (partnerId === 'none' || partnerId === userId) return interaction.reply({ content: '⚠️ Invalid selection.', ephemeral: true });
+        if (interaction.user.id !== userId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
+        if (partnerId === 'none' || partnerId === userId) return ephemeralReply(interaction, '⚠️ Invalid selection.');
+        await interaction.deferUpdate();
+        const RESOURCE_OPTIONS = [
+            { label: '💰 Balance (coins)', value: 'balance' },
+            { label: '⚖️ Wealth', value: 'wealth' },
+            { label: '🥩 Food', value: 'food_surplus' },
+            { label: '⚒️ Ores', value: 'ores' },
+            { label: '🔩 Metallurgy', value: 'metallurgy' },
+            { label: '💧 Vitale', value: 'vitale' },
+            { label: '🍷 Exotics', value: 'exotics' },
+        ];
+        const giveMenu = new StringSelectMenuBuilder()
+            .setCustomId(`trade_odgive_${userId}_${partnerId}`)
+            .setPlaceholder('What will YOU give?')
+            .addOptions(RESOURCE_OPTIONS);
+        return interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🤝 ONE-TIME TRADE').setColor(0x00BFFF).setDescription(`Trading with <@${partnerId}>\n\n**Step 1:** What resource will you give?`)], components: [new ActionRowBuilder().addComponents(giveMenu)] });
+    }
 
+    // One-time trade: give-resource selected → show recv-resource dropdown
+    if (action === 'trade' && args[0] === 'odgive') {
+        const userId = args[1];
+        const partnerId = args[2];
+        const giveRes = interaction.values[0];
+        if (interaction.user.id !== userId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
+        await interaction.deferUpdate();
+        const RESOURCE_OPTIONS = [
+            { label: '💰 Balance (coins)', value: 'balance' },
+            { label: '⚖️ Wealth', value: 'wealth' },
+            { label: '🥩 Food', value: 'food_surplus' },
+            { label: '⚒️ Ores', value: 'ores' },
+            { label: '🔩 Metallurgy', value: 'metallurgy' },
+            { label: '💧 Vitale', value: 'vitale' },
+            { label: '🍷 Exotics', value: 'exotics' },
+        ].filter(o => o.value !== giveRes);
+        const recvMenu = new StringSelectMenuBuilder()
+            .setCustomId(`trade_odrecv_${userId}_${partnerId}_${encRes(giveRes)}`)
+            .setPlaceholder('What do you WANT in return?')
+            .addOptions(RESOURCE_OPTIONS);
+        return interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🤝 ONE-TIME TRADE').setColor(0x00BFFF).setDescription(`Trading with <@${partnerId}>\nYou give: **${giveRes.replace('_surplus',' (Food)')}**\n\n**Step 2:** What resource do you want?`)], components: [new ActionRowBuilder().addComponents(recvMenu)] });
+    }
+
+    // One-time trade: recv-resource selected → show amounts modal
+    if (action === 'trade' && args[0] === 'odrecv') {
+        const userId = args[1];
+        const partnerId = args[2];
+        const giveRes = decRes(args[3]);  // decode — may have been encoded as foodSRP
+        const recvRes = interaction.values[0];
+        if (interaction.user.id !== userId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
+        const user = await db.get('SELECT * FROM users WHERE id=?', userId);
         const modal = new ModalBuilder()
-            .setCustomId(`trade_onedonemod_${userId}_${partnerId}`)
-            .setTitle('🤝 One-Time Trade Offer');
+            .setCustomId(`trade_onedonemod_${userId}_${partnerId}_${encRes(giveRes)}_${encRes(recvRes)}`)
+            .setTitle('🤝 Trade Amounts');
         modal.addComponents(
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('give_res').setLabel('Resource you give').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('wealth')),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('give_amt').setLabel('Amount you give').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('100')),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('recv_res').setLabel('Resource you want').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('food_surplus')),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('recv_amt').setLabel('Amount you want').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('50'))
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('give_amt').setLabel(`${giveRes.replace('_surplus',' (Food)')} to give (you have ${user[giveRes]||0})`).setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('100')),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('recv_amt').setLabel(`${recvRes.replace('_surplus',' (Food)')} to request`).setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('50'))
         );
         return await interaction.showModal(modal);
     }
@@ -622,23 +759,35 @@ async function handleSelect(interaction, action, args) {
     if (action === 'trade' && args[0] === 'route') {
         const userId = args[1];
         const val = interaction.values[0];
-        if (interaction.user.id !== userId) return interaction.reply({ content: '⚠️ Only the player who opened this may use it.', ephemeral: true });
+        if (interaction.user.id !== userId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
 
         if (val === 'list') {
             await interaction.deferUpdate();
             const tradeMod = require('./trade');
             return await tradeMod.handleTradeRouteList(interaction);
         }
-        if (val === 'new') return interaction.reply({ content: 'Use `/atlas empire` and select a faction to trade with. For player routes, select a player above.', ephemeral: true });
+        if (val === 'new') {
+            await interaction.deferUpdate();
+            const factionMenu = new StringSelectMenuBuilder()
+                .setCustomId(`trade_facsel_${userId}`)
+                .setPlaceholder('Select faction...')
+                .addOptions(
+                    { label: 'Styx Empire (Vitale)', value: 'styx' },
+                    { label: 'Sciatic League', value: 'sciatic' },
+                    { label: 'Caossa', value: 'caossa' }
+                );
+            return interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🏛️ Faction Trade').setColor(0x00BFFF).setDescription('Select a faction to establish a route with.')], components: [new ActionRowBuilder().addComponents(factionMenu)] });
+        }
         if (val === 'newplayer') {
             const uid = args[1];
-            if (!players.length) return interaction.reply({ content: 'No other active players.', ephemeral: true });
+            const players = await getActivePlayers(db, uid);
+            if (!players.length) return ephemeralReply(interaction, 'No other active players.');
             const pMenu = new StringSelectMenuBuilder().setCustomId(`trade_newplayer_${uid}`).setPlaceholder('Select a player...')
                 .addOptions(players.slice(0,25).map(p => ({ label: `${p.ruler_name||p.username}${p.nation?' of '+p.nation:''}`, value: p.id })));
             await interaction.deferUpdate();
             return interaction.editReply({ embeds: [new EmbedBuilder().setTitle('📨 New Player Route').setColor(0x00BFFF).setDescription('Select a player for a continuous trade route.')], components: [new ActionRowBuilder().addComponents(pMenu)] });
         }
-        if (val === 'cancel') return interaction.reply({ content: 'Select a specific route below to cancel it.', ephemeral: true });
+        return ephemeralReply(interaction, 'Select a specific route below to cancel it.');
         if (val.startsWith('cancel_')) {
             const routeId = parseInt(val.split('_')[1]);
             await interaction.deferUpdate();
@@ -647,23 +796,164 @@ async function handleSelect(interaction, action, args) {
         }
     }
 
-    // Trade: new player route selected
+    // Trade: new player route — player selected → give-resource dropdown
     if (action === 'trade' && args[0] === 'newplayer') {
         const initiatorId = args[1];
         const partnerId = interaction.values[0];
-        if (interaction.user.id !== initiatorId) return interaction.reply({ content: '⚠️ Only the player who opened this may use it.', ephemeral: true });
+        if (interaction.user.id !== initiatorId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
+        await interaction.deferUpdate();
+        const ROUTE_RESOURCES = [
+            { label: '💰 Balance', value: 'balance' }, { label: '⚖️ Wealth', value: 'wealth' },
+            { label: '🥩 Food', value: 'food_surplus' }, { label: '⚒️ Ores', value: 'ores' },
+            { label: '🔩 Metallurgy', value: 'metallurgy' }, { label: '💧 Vitale', value: 'vitale' },
+            { label: '🍷 Exotics', value: 'exotics' },
+        ];
+        const giveMenu = new StringSelectMenuBuilder()
+            .setCustomId(`trade_plrgive_${initiatorId}_${partnerId}`)
+            .setPlaceholder('What will you GIVE each turn?')
+            .addOptions(ROUTE_RESOURCES);
+        return interaction.editReply({ embeds: [new EmbedBuilder().setTitle('📨 PLAYER TRADE ROUTE').setColor(0x00BFFF).setDescription(`Route with <@${partnerId}>\n\n**Step 1:** What resource will you give each turn?`)], components: [new ActionRowBuilder().addComponents(giveMenu)] });
+    }
 
+    // Player route: give selected → recv dropdown
+    if (action === 'trade' && args[0] === 'plrgive') {
+        const initiatorId = args[1];
+        const partnerId = args[2];
+        const giveRes = interaction.values[0];
+        if (interaction.user.id !== initiatorId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
+        await interaction.deferUpdate();
+        const ROUTE_RESOURCES = [
+            { label: '💰 Balance', value: 'balance' }, { label: '⚖️ Wealth', value: 'wealth' },
+            { label: '🥩 Food', value: 'food_surplus' }, { label: '⚒️ Ores', value: 'ores' },
+            { label: '🔩 Metallurgy', value: 'metallurgy' }, { label: '💧 Vitale', value: 'vitale' },
+            { label: '🍷 Exotics', value: 'exotics' },
+        ].filter(o => o.value !== giveRes);
+        const recvMenu = new StringSelectMenuBuilder()
+            .setCustomId(`trade_plrrecv_${initiatorId}_${partnerId}_${encRes(giveRes)}`)
+            .setPlaceholder('What will you RECEIVE each turn?')
+            .addOptions(ROUTE_RESOURCES);
+        return interaction.editReply({ embeds: [new EmbedBuilder().setTitle('📨 PLAYER TRADE ROUTE').setColor(0x00BFFF).setDescription(`Route with <@${partnerId}>\nYou give: **${giveRes.replace('_surplus',' (Food)')}**\n\n**Step 2:** What resource will you receive?`)], components: [new ActionRowBuilder().addComponents(recvMenu)] });
+    }
+
+    // Player route: recv selected → amounts+duration modal
+    if (action === 'trade' && args[0] === 'plrrecv') {
+        const initiatorId = args[1];
+        const partnerId = args[2];
+        const giveRes = decRes(args[3]);  // decode
+        const recvRes = interaction.values[0];
+        if (interaction.user.id !== initiatorId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
         const modal = new ModalBuilder()
-            .setCustomId(`trade_newplayer_mod_${initiatorId}_${partnerId}`)
-            .setTitle('📨 Player Trade Route');
+            .setCustomId(`trade_newplayer_mod_${initiatorId}_${partnerId}_${encRes(giveRes)}_${encRes(recvRes)}`)
+            .setTitle('📨 Route Amounts');
         modal.addComponents(
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('give_res').setLabel('Resource you give').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('wealth')),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('give_amt').setLabel('Amount per turn').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('100')),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('recv_res').setLabel('Resource you receive').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('food_surplus')),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('recv_amt').setLabel('Amount per turn').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('50')),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('give_amt').setLabel(`${giveRes.replace('_surplus',' (Food)')} to give per turn`).setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('100')),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('recv_amt').setLabel(`${recvRes.replace('_surplus',' (Food)')} to receive per turn`).setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('50')),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('duration').setLabel('Duration (1-10 turns)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('3'))
         );
         return await interaction.showModal(modal);
+    }
+
+    if (action === 'trade' && args[0] === 'facsel') {
+        const userId = args[1];
+        const faction = interaction.values[0];
+        if (interaction.user.id !== userId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
+
+        await interaction.deferUpdate();
+
+        // Embargo check — blocked only when relations are Hostile (≤ −10)
+        const FACTION_DB_NAMES = { styx: 'Tyrannite', sciatic: 'Sciatic League', caossa: 'Caossa' };
+        const factionDbName = FACTION_DB_NAMES[faction];
+        if (factionDbName) {
+            const rel = await db.get('SELECT score FROM relations WHERE user_id=? AND faction_name=?', userId, factionDbName);
+            if (rel && rel.score <= -10)
+                return interaction.editReply({ content: `🚫 **Embargoed** — Your relations with **${factionDbName}** are Hostile (${rel.score}). Bribe or gift them above −10 to resume trading.`, embeds: [], components: [] });
+        }
+
+        const resMenu = new StringSelectMenuBuilder()
+            .setCustomId(`trade_facgive_${userId}_${faction}`)
+            .setPlaceholder('Select resource you GIVE...')
+            .addOptions([
+                { label: '💰 Balance', value: 'balance' },
+                { label: '⚖️ Wealth', value: 'wealth' },
+                { label: '🥩 Food', value: 'food_surplus' },
+                { label: '⚒️ Ores', value: 'ores' },
+                { label: '🔩 Metallurgy', value: 'metallurgy' },
+                { label: '🍷 Exotics', value: 'exotics' },
+                { label: '🔗 Servus', value: 'servus' },
+            ]);
+        return interaction.editReply({ embeds: [new EmbedBuilder().setTitle(`🤝 Trade with ${faction.charAt(0).toUpperCase() + faction.slice(1)}`).setColor(0x00BFFF).setDescription('What resource will you give?')], components: [new ActionRowBuilder().addComponents(resMenu)] });
+    }
+
+    if (action === 'trade' && args[0] === 'facgive') {
+        const userId = args[1];
+        const faction = args[2];
+        const giveRes = interaction.values[0];
+        if (interaction.user.id !== userId) return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
+
+        await interaction.deferUpdate();
+        // Build receive options — exclude the same resource being given to avoid no-op trades
+        const ALL_FACTION_RESOURCES = [
+            { label: '💰 Balance', value: 'balance' },
+            { label: '⚖️ Wealth', value: 'wealth' },
+            { label: '🥩 Food', value: 'food_surplus' },
+            { label: '⚒️ Ores', value: 'ores' },
+            { label: '🔩 Metallurgy', value: 'metallurgy' },
+            { label: '💧 Vitale', value: 'vitale' },
+            { label: '🍷 Exotics', value: 'exotics' },
+            { label: '🔗 Servus', value: 'servus' },
+        ].filter(o => o.value !== giveRes);
+        const resMenu = new StringSelectMenuBuilder()
+            .setCustomId(`trade_facrecv_${userId}_${faction}_${encRes(giveRes)}`)
+            .setPlaceholder('Select resource you WANT...')
+            .addOptions(ALL_FACTION_RESOURCES);
+        return interaction.editReply({ embeds: [new EmbedBuilder().setTitle(`🤝 Trade with ${faction.charAt(0).toUpperCase() + faction.slice(1)}`).setColor(0x00BFFF).setDescription('What resource do you want in return?')], components: [new ActionRowBuilder().addComponents(resMenu)] });
+    }
+
+    if (action === 'trade' && args[0] === 'facrecv') {
+        const userId = args[1];
+        const faction = args[2];
+        const giveRes = decRes(args[3]);  // decode
+        const recvRes = interaction.values[0];
+        return ephemeralReply(interaction, '⚠️ Only the player who opened this may use it.');
+
+        await interaction.deferUpdate();
+
+        // Build preview info before opening modal
+        let previewLines = [];
+        if (faction === 'styx' && recvRes === 'vitale') {
+            const settings = await db.all('SELECT * FROM global_settings');
+            const getS = k => settings.find(s => s.key === k)?.value;
+            const pCount = (await db.get('SELECT COUNT(*) as cnt FROM users WHERE status=?', 'active'))?.cnt || 1;
+            const vBase = parseInt(getS('vitale_base')) || 15;
+            const vSold = parseInt(getS('vitale_sold_week')) || 0;
+            const pool = vBase + (10 * pCount);
+            const price = Math.floor(50 * (1 + (vSold / Math.max(1, pool)) * 4));
+            previewLines = [
+                `**💱 Current Styx Exchange Rate**`,
+                `**${price} ⚖️ Wealth** = **1 💧 Vitale**`,
+                `Pool remaining: ${pool - vSold} / ${pool}`,
+                '',
+                'Enter how much **Wealth** to give in the next step.',
+            ];
+        } else {
+            previewLines = [
+                `**Exchange:** ${giveRes.replace('_surplus','')} → ${recvRes.replace('_surplus','')}`,
+                '',
+                'Enter how much you want to give in the next step.',
+            ];
+        }
+
+        const previewEmb = new EmbedBuilder()
+            .setTitle(`🤝 Trade with ${faction.charAt(0).toUpperCase() + faction.slice(1)}`)
+            .setColor(0x00BFFF)
+            .setDescription(previewLines.join('\n'));
+
+        const confirmBtn = new ButtonBuilder()
+            .setCustomId(`trade_facconfirm_${userId}_${faction}_${encRes(giveRes)}_${encRes(recvRes)}`)
+            .setLabel('📋 Enter Amount →')
+            .setStyle(ButtonStyle.Primary);
+
+        return interaction.editReply({ embeds: [previewEmb], components: [new ActionRowBuilder().addComponents(confirmBtn)] });
     }
 }
 

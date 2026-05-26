@@ -1,70 +1,118 @@
 # ATLAS — NationRP Discord Bot
 
-A fantasy nation-roleplay Discord bot for the Ares Heiliga League. Built on `discord.js` v14 with a SQLite-backed character/economy/diplomacy engine and a Pathfinder-2e-flavored character sheet system.
+> A fully self-contained NationRP engine for Discord, built on discord.js v14 and SQLite.
+> Players build nations, raise armies, trade resources, engage in diplomacy, and wage war — all through interactive Discord slash commands.
+
+---
 
 ## Quick Start
 
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
-2. Create a `.env` in the repo root (see [Environment Variables](#environment-variables)).
-3. Launch the bot:
-   ```bash
-   npm start
-   ```
-   The first boot creates `database.sqlite` and registers slash commands against the configured guild.
+```bash
+# 1. Clone and install
+git clone https://github.com/Jahawk44/nationrp-bot
+cd nationrp-bot
+npm install
+
+# 2. Configure environment
+cp .env.example .env   # fill in TOKEN, CLIENT_ID, GUILD_ID, OWNER_ID
+
+# 3. Run
+npm start              # production
+npm run dev            # development (auto-restarts on file change)
+```
+
+---
 
 ## Environment Variables
 
-Create a `.env` file with at minimum:
+| Variable | Description | Required |
+|---|---|---|
+| `DISCORD_TOKEN` | Bot token from the [Discord Developer Portal](https://discord.com/developers) | ✅ |
+| `CLIENT_ID` | Application (client) ID | ✅ |
+| `GUILD_ID` | Server ID to register commands to | ✅ |
+| `OWNER_ID` | Discord user ID of the server owner (bypass all access checks) | ✅ |
 
-| Variable | Required | Purpose |
-| :--- | :---: | :--- |
-| `DISCORD_TOKEN` | yes | Bot token from the Discord Developer Portal. |
-| `GUILD_ID` | recommended | Guild for instant slash-command registration. Without it, commands sync globally and may take up to an hour. |
-| `ADMIN_CHANNEL_ID` | optional | Channel for Imperial Audit notifications and the weekly Age Transition embed. Falls back to a channel literally named `atlas-hq`. |
-| `OWNER_ID` | optional | Discord user ID that bypasses all permission gates (defaults to the historical owner ID). |
+---
 
-## Project Layout
+## Feature Overview
+
+| Category | Commands / Features |
+|---|---|
+| **Character** | `/atlas begin` — Origins flow (Ancestry, Upbringing, Profession, free stat boosts, biography) |
+| **Profile** | `/atlas profile` — Full character sheet with rank, Great House, stats, and treasury |
+| **Economy** | `/atlas tax`, `/atlas balance`, `/atlas donate`, `/atlas gift` |
+| **Trade** | `/atlas trade` — GUI-driven trade proposals and persistent trade routes |
+| **Settlement** | `/atlas town` — Settle, build, upgrade, demolish, rename |
+| **Population** | `/atlas population` — Commoners, nobles, Vitale demand, food deficit warnings |
+| **Empire** | `/atlas empire` — Faction trade routes, Vitale market, Imperial throne status |
+| **Diplomacy** | `/atlas relation` — Faction standing, bribe/gift factions, propose player treaties |
+| **Military** | `/atlas military` — Recruit infantry/cavalry/ranged/siege/mercs, set formations |
+| **Warfare** | `/atlas war battle`, `/atlas war siege`, `/atlas war raid` |
+| **Colosseum** | `/atlas colosseum` — Player duels, terrain selection, stance system, betting |
+| **Oracle** | `/atlas roll` — Stat-based or free-form dice rolls (d4–d100) |
+| **Leaderboard** | `/atlas leaderboard` — Nation rankings across Economy, Defense, Offense, Prestige, Stability |
+| **GM Tools** | `/atlas gm roll`, `/admin user edit/purge`, `/admin town edit/remove`, GM whitelist |
+| **Scheduler** | Automated: weekly turns, daily population/military tick, hourly tax notifications |
+
+---
+
+## Project Structure
 
 ```
 src/
-  index.js                  Entry point. Forces IPv4 via undici Agent + dns.lookup.
-  database.js               SQLite schema + idempotent ALTER TABLE migrations.
-  scheduler.js              node-cron weekly turn cycle (Mon 00:00).
-  data/
-    constants.js            Static game data: terrains, buildings, ancestries, backgrounds, professions, factions, stat mapping.
-  utils/
-    helpers.js              getMod, fmtMod, isGM, resolveAtlasHQ, applyBoost, buildBaseAttributes, deriveSheetFromStats.
-  commands/
-    atlas.js                Player slash command surface (origins, profile, town, gm).
-    admin.js                Imperial Audit / GM whitelist / system protocols.
-  events/
-    ready.js                Boot, avatar sync, command registration.
-    interactionCreate.js    Slash-command, button, autocomplete, and modal-submit dispatcher.
+├── index.js                    # Entry point — Discord client, IPv4 agent, error handlers
+├── database.js                 # SQLite schema init (read-only — all migrations go in helpers.js)
+├── scheduler.js                # node-cron jobs: weekly turn, daily tick, hourly notifier
+│
+├── commands/
+│   ├── atlas.js                # Slash command definitions + top-level routing
+│   ├── admin.js                # GM/admin slash commands
+│   └── atlas/                  # Feature sub-modules (one file per system)
+│       ├── action.js           # Scout, Oracle rolls
+│       ├── battlename.js       # Battle name generator
+│       ├── character.js        # Origins flow, profile
+│       ├── colosseum.js        # Duel system
+│       ├── diplomacy.js        # Relations, treaties, gifts
+│       ├── economy.js          # Tax, balance, trade routes, faction trade
+│       ├── events.js           # Rebellion / revolt event handlers
+│       ├── leaderboard.js      # Nation score rankings
+│       ├── military.js         # Army recruitment, formations, battle composition GUI
+│       ├── town.js             # Settlement management
+│       ├── trade.js            # Player-to-player trade proposals
+│       ├── warfare.js          # Shared combat math + button/modal router  ← entry point
+│       ├── warfare_battle.js   # Field battle lifecycle
+│       ├── warfare_siege.js    # Siege lifecycle
+│       └── warfare_raid.js     # Raid lifecycle
+│
+├── data/
+│   └── constants.js            # All game constants (BUILDINGS, ANCESTRIES, FORMATIONS, etc.)
+│
+├── events/
+│   ├── interactionCreate.js    # Central interaction router (buttons, selects, modals, autocomplete)
+│   └── ready.js                # Bot ready event — avatar, command sync
+│
+└── utils/
+    └── helpers.js              # Shared utilities: getMod, safeReply, ephemeralReply, initDB, etc.
 ```
 
-## Documentation
+---
 
-- [`changelog.md`](changelog.md) — versioned release log.
-- [`update.md`](update.md) — feature map, file-by-file responsibilities, troubleshooting notes.
-- [`roadmap.md`](roadmap.md) — planned features.
+## Architecture Notes
 
-## Character System (1.0.8)
+- **Database migrations** live exclusively in `helpers.js → initDB()`. Never add schema changes to `database.js`.
+- **No business logic in `interactionCreate.js`** — it is a pure router. All logic belongs in the feature sub-module.
+- **Ephemeral replies** in button/select handlers use `ephemeralReply()` from `helpers.js`, which calls `followUp` to avoid the "message deleted" UI artefact.
+- **Parameterized queries only** — no string interpolation in SQL anywhere in the codebase.
+- **File size limit: 350 lines** — split to `*_helpers.js` or a new sub-module if exceeded.
+- **Discord API limits**: button `customId` ≤ 100 chars, embed description ≤ 4096 chars, select options ≤ 25, ActionRows per message ≤ 5.
 
-Characters are built on a Pathfinder-2e-flavored boost stack:
+---
 
-1. All six attributes start at **10**.
-2. **Ancestry** applies its `bonuses` (e.g. Daxos = +2 CHA, +1 INT).
-3. **Background** (Upbringing) applies its `bonuses` (e.g. Yard = +2 STR, +1 MEN).
-4. **Profession** applies its `bon` (e.g. Commander = +2 MEN).
-5. **Free Boost Distributor** lets the player allocate **4** free `+1` points (max **+2** per stat).
-6. Discord modal captures up to 500 chars of biography.
-7. The Imperial Audit posts the full sheet (AC / HP / LVL / stats / sub-stats / bio) to `atlas-hq`.
+## Key Reference Files
 
-`HP = 8 + STR mod` at level 1 (`+5 + STR mod` per level after). `AC = 10 + MOT mod`. The standard `floor((stat - 10) / 2)` modifier formula applies. Modifiers are guaranteed to be `≥ 0` for any reasonable build.
-
-## License
-
-ISC.
+| Purpose | File |
+|---|---|
+| Game balance constants | [`src/data/constants.js`](src/data/constants.js) |
+| AI development directives & lore | [`ai_instructions.md`](ai_instructions.md) |
+| Changelog & patch notes | [`updates.md`](updates.md) |
+| Feature roadmap | [`roadmap.md`](roadmap.md) |

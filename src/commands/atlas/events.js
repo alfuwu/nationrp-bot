@@ -1,6 +1,13 @@
 const { EmbedBuilder } = require('discord.js');
 const { isGM, getNotificationChannel, resolveAtlasHQ } = require('../../utils/helpers');
 
+// Lazy-load warfare to avoid circular-require issues at module init time
+let _warfare;
+function getWarfare() {
+    if (!_warfare) _warfare = require('./warfare');
+    return _warfare;
+}
+
 const EVENT_TYPES = {
     famine:         { title: '🌾 FAMINE',         desc: 'Crops fail and food stores dwindle. Severity: {sev}/3.',          color: 0xCC4400 },
     plague:         { title: '☠️ PLAGUE',         desc: 'Sickness spreads through the population. Severity: {sev}/3.',       color: 0x884400 },
@@ -166,7 +173,7 @@ async function applyEventEffects(db, user, type, severity, amount) {
 
 async function handleServusUprising(db, user, sev) {
     try {
-        const warfare = require('./warfare');
+        const warfare = getWarfare();
         if (warfare.handleRebellionEvent) {
             return await warfare.handleRebellionEvent(db, user);
         }

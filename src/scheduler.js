@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { calcStabMultiplier } = require('./utils/helpers');
+const { calcStabMultiplier, calcMaintenance } = require('./utils/helpers');
 const { processTradeRoutes } = require('./commands/atlas/trade');
 
 function initScheduler(client) {
@@ -92,57 +92,104 @@ function initScheduler(client) {
                 }
 
                 let delta = 0;
-                if (food > 0 && currentPop < popCap) {
-                    delta = Math.max(1, Math.floor(currentPop * 0.01));
-                    delta = Math.min(delta, popCap - currentPop); // don't exceed cap
+                // Tiered pop growth based on food surplus level.
+                // Rates tuned for medieval realism — still compressed vs real history
+                // but won't double a town's population in a month.
+                if (food >= 1000 && currentPop < popCap) {
+                    delta = Math.max(1, Math.floor(currentPop * 0.005));  // Abundant:     +0.5%/day
+                } else if (food >= 200 && currentPop < popCap) {
+                    delta = Math.max(1, Math.floor(currentPop * 0.003));  // Comfortable:  +0.3%/day
+                } else if (food > 0 && currentPop < popCap) {
+                    delta = Math.max(1, Math.floor(currentPop * 0.0015)); // Subsisting:  +0.15%/day
                 } else if (food <= 0) {
-                    delta = -Math.max(1, Math.floor(currentPop * 0.01)); // famine
+                    delta = -Math.max(1, Math.floor(currentPop * 0.01)); // Famine:       −1%/day
                 }
+                delta = Math.min(delta, popCap - currentPop); // don't exceed cap
 
                 // ── Military maintenance ─────────────────────────────────────
-                // FIXED: Soldiers consume food daily. If food can't cover upkeep,
-                // soldiers desert (pop_soldiers decreases).
-                const soldiers        = u.pop_soldiers       || 0;
-                const maintenanceCost = u.mil_maintenance_cost || 0;
-                let foodAfterMil      = food + delta; // apply growth first
+                // FIXED: Use calcMaintenance() against actual mil_* columns.
+                // Legacy pop_soldiers/mil_strength are always 0 in the new schema.
+                const maintenanceCost = calcMaintenance(u);
+                let foodAfterMil = food + delta; // apply pop growth first
 
-                let soldierDesertion = 0;
+                let soldierDesertion = {};
                 if (maintenanceCost > 0) {
                     if (foodAfterMil >= maintenanceCost) {
                         // Can pay full upkeep
                         foodAfterMil -= maintenanceCost;
                     } else {
-                        // Can only partially pay — soldiers desert proportionally
-                        const deficit      = maintenanceCost - Math.max(0, foodAfterMil);
-                        soldierDesertion   = Math.ceil(deficit); // 1 soldier deserts per food unit short
-                        soldierDesertion   = Math.min(soldierDesertion, soldiers); // cap at army size
-                        foodAfterMil       = 0;
-                        // Stability penalty for desertion
-                        await db.run(
-                            'UPDATE users SET rate_stab = MAX(-10, rate_stab - 1) WHERE id = ?',
-                            u.id
-                        );
-                        console.log(`[SCHEDULER] ${u.id}: ${soldierDesertion} soldiers deserted due to food shortage.`);
+                        // Shortage — desert proportionally from each unit type
+                        const deficit = maintenanceCost - Math.max(0, foodAfterMil);
+                        const desertRatio = Math.min(1, deficit / Math.max(1, maintenanceCost));
+                        foodAfterMil = 0;
+                        soldierDesertion = {
+                            mil_militia:   Math.ceil((u.mil_militia   || 0) * desertRatio),
+                            mil_spearmen:  Math.ceil((u.mil_spearmen  || 0) * desertRatio),
+                            mil_swordsman: Math.ceil((u.mil_swordsman || 0) * desertRatio),
+                            mil_shield:    Math.ceil((u.mil_shield    || 0) * desertRatio),
+                            mil_cavalry:   Math.ceil((u.mil_cavalry   || 0) * desertRatio),
+                            mil_ranged:    Math.ceil((u.mil_ranged    || 0) * desertRatio),
+                            mil_siege:     Math.ceil((u.mil_siege     || 0) * desertRatio),
+                            mercs_temp:    Math.ceil((u.mercs_temp    || 0) * desertRatio),
+                        };
+                        const totalDeserted = Object.values(soldierDesertion).reduce((a,b) => a+b, 0);
+                        if (totalDeserted > 0) {
+                            // Stability penalty
+                            await db.run('UPDATE users SET rate_stab=MAX(-10,rate_stab-1) WHERE id=?', u.id);
+                            console.log(`[SCHEDULER] ${u.id}: ${totalDeserted} units deserted (${(desertRatio*100).toFixed(0)}% shortage).`);
+                        }
                     }
                 }
 
-                // Apply all updates in one query
+                // ── Food rot: 5%/day — surplus decays to prevent infinite hoarding ──
+                // Applied after military maintenance. Min 0.
+                foodAfterMil = Math.max(0, Math.floor(foodAfterMil * 0.95));
+
+                // Calculate new maintenance cost after potential desertions
+                const postDesertion = {
+                    mil_militia:   (u.mil_militia   || 0) - (soldierDesertion.mil_militia   || 0),
+                    mil_spearmen:  (u.mil_spearmen  || 0) - (soldierDesertion.mil_spearmen  || 0),
+                    mil_swordsman: (u.mil_swordsman || 0) - (soldierDesertion.mil_swordsman || 0),
+                    mil_shield:    (u.mil_shield    || 0) - (soldierDesertion.mil_shield    || 0),
+                    mil_cavalry:   (u.mil_cavalry   || 0) - (soldierDesertion.mil_cavalry   || 0),
+                    mil_ranged:    (u.mil_ranged    || 0) - (soldierDesertion.mil_ranged    || 0),
+                    mil_siege:     (u.mil_siege     || 0) - (soldierDesertion.mil_siege     || 0),
+                    mercs_temp:    (u.mercs_temp    || 0) - (soldierDesertion.mercs_temp    || 0),
+                };
+                const newMaintCost = calcMaintenance(postDesertion);
+
+                // tax_notified lifecycle: economy.js resets → 0 on each tax collect;
+                // hourly notifier sets → 1 after sending. Do NOT reset here — that
+                // caused the midnight cron to re-arm notifications for players whose
+                // 24h cooldown hadn't elapsed yet, firing a premature "tax ready" ping.
                 await db.run(`
                     UPDATE users SET
-                        pop_commoners      = MAX(0, pop_commoners + ?),
-                        food_surplus       = MAX(0, ?),
-                        pop_soldiers       = MAX(0, pop_soldiers - ?),
-                        mil_strength       = MAX(0, mil_strength - ?),
-                        mil_maintenance_cost = MAX(0, mil_maintenance_cost - ?),
-                        tax_notified       = 0
+                        pop_commoners         = MAX(0, pop_commoners + ?),
+                        food_surplus          = MAX(0, ?),
+                        mil_militia           = MAX(0, mil_militia   - ?),
+                        mil_spearmen          = MAX(0, mil_spearmen  - ?),
+                        mil_swordsman         = MAX(0, mil_swordsman - ?),
+                        mil_shield            = MAX(0, mil_shield    - ?),
+                        mil_cavalry           = MAX(0, mil_cavalry   - ?),
+                        mil_ranged            = MAX(0, mil_ranged    - ?),
+                        mil_siege             = MAX(0, mil_siege     - ?),
+                        mercs_temp            = MAX(0, mercs_temp    - ?),
+                        mil_maintenance_cost  = ?
                     WHERE id = ?`,
                     delta,
                     foodAfterMil,
-                    soldierDesertion,
-                    soldierDesertion,
-                    soldierDesertion,
+                    soldierDesertion.mil_militia   || 0,
+                    soldierDesertion.mil_spearmen  || 0,
+                    soldierDesertion.mil_swordsman || 0,
+                    soldierDesertion.mil_shield    || 0,
+                    soldierDesertion.mil_cavalry   || 0,
+                    soldierDesertion.mil_ranged    || 0,
+                    soldierDesertion.mil_siege     || 0,
+                    soldierDesertion.mercs_temp    || 0,
+                    newMaintCost,
                     u.id
                 );
+
             }
             console.log('[SCHEDULER] Daily Population + Military Maintenance complete.');
         } catch (error) {
