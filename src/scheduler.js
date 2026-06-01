@@ -98,15 +98,23 @@ function initScheduler(client) {
                 if (food > 0) {
                     delta = (Math.random() * 0.2 + 0.9) // ±10% variation
                         * Math.pow(currentPop, 0.13 * Math.log10(currentPop)) // increase growth based off population
-                        * Math.sqrt(food) * Math.log10(food) // increase growth based off food surplus
                         * Math.min(1, food / currentPop) // decrease growth if there's not enough food surplus to feed everyone
                         * Math.min(1, (popCap - currentPop) / (Math.log10(currentPop) / Math.log10(1.1))) // decrease growth as population approaches cap, invert growth if over
                         / 250; // divide by 250 to make number reasonable
-                    if (delta >= 0 && delta < 1)
-                        delta = 1
-                } else if (food < 0) {
+                    if (currentPop < popCap)
+                        delta *= Math.sqrt(food) * Math.log10(food) // increase growth based off food surplus
+                    else
+                        delta *= 10 * Math.sqrt(food) * Math.log10(food) / food; // increase growth based off how little food is available (gets inverted by population being over popcap)
+                } else if (food <= 0) {
                     delta = -Math.max(1, Math.floor(currentPop * 0.01)); // Famine: −1%/day
                 }
+
+                if (isNaN(delta))
+                    delta = 0;
+                if (delta < 0 && delta > -1)
+                    delta = -1;
+                else if (delta >= 0 && delta < 1 && currentPop < popCap && food > 0)
+                    delta = 1;
 
                 const maintenanceCost = calcMaintenance(u);
                 let foodAfterMil = food + delta; // apply pop growth first
